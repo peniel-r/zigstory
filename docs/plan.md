@@ -147,7 +147,7 @@ None (foundation phase)
 - [x] PRAGMA settings verified: journal_mode=WAL, synchronous=NORMAL, busy_timeout=1000
 - [x] All tables and indices created successfully
 - [x] FTS5 virtual table functional
-- [ ] CLI accepts all three subcommands (add, search, import)
+- [x] CLI accepts all three subcommands (add, search, import)
 - [ ] Unit tests pass with ≥80% coverage on database layer
 - [ ] Concurrent read/write operations execute without blocking
 

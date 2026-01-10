@@ -1,6 +1,7 @@
 const std = @import("std");
 
 pub const db = @import("db/database.zig");
+pub const cli = @import("cli/args.zig");
 
 test "database initialization" {
     // Test database flow
