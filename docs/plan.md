@@ -148,7 +148,7 @@ None (foundation phase)
 - [x] All tables and indices created successfully
 - [x] FTS5 virtual table functional
 - [x] CLI accepts all three subcommands (add, search, import)
-- [ ] Unit tests pass with ≥80% coverage on database layer
+- [x] Unit tests pass with ≥80% coverage on database layer
 - [ ] Concurrent read/write operations execute without blocking
 
 ### Deliverables
