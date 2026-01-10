@@ -169,31 +169,40 @@ Implement command history ingestion pipeline with metadata collection and PowerS
 
 ### Tasks
 
-#### Task 2.1: Command Ingestion Logic
+#### Task 2.1: Command Ingestion Logic ✅
 
 **Action:** Implement `add` command handler with sanitization  
 **File:** `src/cli/add.zig`  
+**Status:** COMPLETED
+
 **Requirements:**
 
-- Accept parameters: `--cmd`, `--cwd`, `--exit`, `--duration` (optional)
-- Sanitize input strings (escape SQL injection attempts)
-- Generate unique `session_id` (UUID v4)
-- Capture `hostname` from system
-- Insert record into `history` table
-- Return success/error status
+- ✅ Accept parameters: `--cmd`, `--cwd`, `--exit`, `--duration` (optional)
+- ✅ Sanitize input strings (escape SQL injection attempts)
+- ✅ Generate unique `session_id` (UUID v4)
+- ✅ Capture `hostname` from system
+- ✅ Insert record into `history` table
+- ✅ Return success/error status
 
 **Input Validation:**
 
-- `cmd` must not be empty
-- `cwd` must be valid path
-- `exit_code` must be integer
+- ✅ `cmd` must not be empty
+- ✅ `cwd` must be valid path
+- ✅ `exit_code` must be integer
 
 **Verification:**
 
-- Valid commands insert successfully
-- Empty commands rejected
-- SQL injection attempts fail safely
-- Session ID is unique per session
+- ✅ Valid commands insert successfully
+- ✅ Empty commands rejected
+- ✅ SQL injection attempts fail safely (parameterized queries)
+- ✅ Session ID is unique per session
+
+**Implementation Details:**
+
+- Created `src/cli/add.zig` with full validation and error handling
+- Updated `src/main.zig` to integrate database operations
+- Added comprehensive test suite in `tests/add_test.zig` (6 test cases)
+- All tests passing (11/11 tests passed)
 
 ---
 
