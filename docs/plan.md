@@ -149,7 +149,7 @@ None (foundation phase)
 - [x] FTS5 virtual table functional
 - [x] CLI accepts all three subcommands (add, search, import)
 - [x] Unit tests pass with ≥80% coverage on database layer
-- [ ] Concurrent read/write operations execute without blocking
+- [x] Concurrent read/write operations execute without blocking
 
 ### Deliverables
 

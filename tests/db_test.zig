@@ -114,3 +114,64 @@ test "insertCommand: simple write and read" {
         }
     }
 }
+
+test "concurrent read/write operations" {
+    var data = try createTempDb();
+    defer {
+        data.db.deinit();
+        std.testing.allocator.free(data.path);
+        data.tmp_dir.cleanup();
+    }
+
+    // Insert initial data
+    {
+        var stmt = try data.db.prepare("INSERT INTO history (cmd, cwd, exit_code, duration_ms) VALUES (?, ?, ?, ?)");
+        defer stmt.deinit();
+        try stmt.exec(.{}, .{
+            .cmd = "initial command",
+            .cwd = "/tmp",
+            .exit_code = @as(i32, 0),
+            .duration_ms = @as(i64, 100),
+        });
+    }
+
+    // Open a second connection to the same database
+    const db_path_z = try std.testing.allocator.dupeZ(u8, data.path);
+    defer std.testing.allocator.free(db_path_z);
+
+    var db2 = try db.initDb(db_path_z);
+    defer db2.deinit();
+
+    // Start a read transaction on first connection
+    {
+        var stmt = try data.db.prepare("SELECT COUNT(*) as count FROM history");
+        defer stmt.deinit();
+        var iter = try stmt.iterator(struct { count: i32 }, .{});
+
+        if (try iter.next(.{})) |row| {
+            try std.testing.expectEqual(@as(i32, 1), row.count);
+        }
+
+        // While reading, write on second connection (should not block in WAL mode)
+        {
+            var write_stmt = try db2.prepare("INSERT INTO history (cmd, cwd, exit_code, duration_ms) VALUES (?, ?, ?, ?)");
+            defer write_stmt.deinit();
+            try write_stmt.exec(.{}, .{
+                .cmd = "concurrent write",
+                .cwd = "/tmp",
+                .exit_code = @as(i32, 0),
+                .duration_ms = @as(i64, 200),
+            });
+        }
+    }
+
+    // Verify both writes succeeded
+    {
+        var stmt = try data.db.prepare("SELECT COUNT(*) as count FROM history");
+        defer stmt.deinit();
+        var iter = try stmt.iterator(struct { count: i32 }, .{});
+        if (try iter.next(.{})) |row| {
+            try std.testing.expectEqual(@as(i32, 2), row.count);
+        }
+    }
+}
