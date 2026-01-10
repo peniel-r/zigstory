@@ -2,3 +2,11 @@
 .zig-cache/
 zig-out/
 
+# Output
+*.exe
+*.dll
+*.db
+
+# .NET
+bin/
+obj/
