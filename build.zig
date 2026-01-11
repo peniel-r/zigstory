@@ -184,6 +184,31 @@ pub fn build(b: *std.Build) void {
     write_tests.linkLibC();
     const run_write_tests = b.addRunArtifact(write_tests);
 
+    const import_mod = b.createModule(.{
+        .root_source_file = b.path("src/cli/import.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sqlite", .module = sqlite_mod },
+        },
+    });
+
+    // Import Tests
+    const import_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/import_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "sqlite", .module = sqlite_mod },
+                .{ .name = "db", .module = db_mod },
+                .{ .name = "import", .module = import_mod },
+            },
+        }),
+    });
+    import_tests.linkLibC();
+    const run_import_tests = b.addRunArtifact(import_tests);
+
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
@@ -193,6 +218,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_db_tests.step);
     test_step.dependOn(&run_add_tests.step);
     test_step.dependOn(&run_write_tests.step);
+    test_step.dependOn(&run_import_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
