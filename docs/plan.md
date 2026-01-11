@@ -283,10 +283,12 @@ function Global:Prompt {
 
 ---
 
-#### Task 2.4: History Import Functionality
+#### Task 2.4: History Import Functionality ✅
 
-**Action:** Implement migration from existing PowerShell history  
-**File:** `src/cli/import.zig`  
+**Action:** Implement migration from existing PowerShell history
+**File:** `src/cli/import.zig`
+**Status:** COMPLETED
+
 **Requirements:**
 
 1. Read PowerShell history file (`(Get-PSReadlineOption).HistorySavePath`)
@@ -302,10 +304,23 @@ function Global:Prompt {
 
 **Verification:**
 
-- All unique commands from history file imported
-- No duplicate records created
-- Progress bar updates during import
-- Handles large history files (10,000+ commands)
+- ✅ All unique commands from history file imported
+- ✅ No duplicate records created
+- ✅ Progress bar updates during import
+- ✅ Handles large history files (10,000+ commands)
+
+**Implementation Details:**
+
+- Created `src/cli/import.zig` with full import functionality
+- Implemented `getHistoryPath()` to find PowerShell history file
+- Implemented `parseHistoryFile()` to parse history entries
+- Implemented `isDuplicate()` to prevent duplicate imports
+- Implemented `importHistory()` main function with progress tracking
+- Fixed memory management (proper cleanup of allocated commands)
+- Added `stmt.reset()` to prevent SQLite misuse errors
+- Created comprehensive test suite in `tests/import_test.zig` (10 tests)
+- Updated `build.zig` to include import tests
+- All tests passing (30/30 total tests in project)
 
 ---
 
@@ -315,11 +330,11 @@ function Global:Prompt {
 
 ### Acceptance Criteria
 
-- [ ] `zigstory add --cmd "..." --cwd "..." --exit 0` inserts successfully
+- [x] `zigstory add --cmd "..." --cwd "..." --exit 0` inserts successfully
 - [ ] PowerShell Prompt hook triggers on every command execution
 - [ ] Exit code captured accurately (including success/failure states)
 - [ ] Duration measured and recorded in milliseconds
-- [ ] Import migrates existing PowerShell history without duplicates
+- [x] Import migrates existing PowerShell history without duplicates
 - [x] Write operations complete in <50ms average (single), <1s (batch 100)
 - [ ] Async writes don't block PowerShell prompt
 - [x] SQL injection attempts fail safely
@@ -330,6 +345,7 @@ function Global:Prompt {
 - `src/db/write.zig` - Optimized write operations
 - `scripts/profile.ps1` - PowerShell integration script
 - `src/cli/import.zig` - History import utility
+- `tests/import_test.zig` - Import unit tests
 - Performance benchmark results
 - Unit tests for write operations
 
