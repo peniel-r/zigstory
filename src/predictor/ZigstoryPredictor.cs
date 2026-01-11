@@ -12,7 +12,7 @@ namespace zigstoryPredictor;
 public class ZigstoryPredictor : ICommandPredictor
 {
     private readonly Guid _guid = new Guid("a8c5e3f1-2b4d-4e9a-8f1c-3d5e7b9a1c2f");
-    private readonly string _dbPath;
+    private readonly DatabaseManager _dbManager;
     
     public Guid Id => _guid;
     public string Name => "ZigstoryPredictor";
@@ -21,7 +21,8 @@ public class ZigstoryPredictor : ICommandPredictor
     public ZigstoryPredictor()
     {
         var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        _dbPath = Path.Combine(userProfile, ".zigstory", "history.db");
+        var dbPath = Path.Combine(userProfile, ".zigstory", "history.db");
+        _dbManager = new DatabaseManager(dbPath);
     }
 
     public SuggestionPackage GetSuggestion(
@@ -34,11 +35,6 @@ public class ZigstoryPredictor : ICommandPredictor
             var input = context.InputAst.Extent.Text;
 
             if (string.IsNullOrWhiteSpace(input) || input.Length < 2)
-            {
-                return default;
-            }
-
-            if (!File.Exists(_dbPath))
             {
                 return default;
             }
@@ -67,11 +63,11 @@ public class ZigstoryPredictor : ICommandPredictor
     private List<string> GetSuggestionsFromDatabase(string input, CancellationToken cancellationToken)
     {
         var results = new List<string>();
+        SqliteConnection? connection = null;
 
         try
         {
-            using var connection = new SqliteConnection($"Data Source={_dbPath};Mode=ReadOnly");
-            connection.Open();
+            connection = _dbManager.GetConnection();
 
             var query = @"
                 SELECT DISTINCT cmd 
@@ -95,6 +91,13 @@ public class ZigstoryPredictor : ICommandPredictor
         }
         catch
         {
+        }
+        finally
+        {
+            if (connection != null)
+            {
+                _dbManager.ReturnConnection(connection);
+            }
         }
 
         return results;
