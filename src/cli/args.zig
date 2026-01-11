@@ -5,6 +5,7 @@ pub const Action = union(enum) {
     search: void,
     import: void,
     stats: void,
+    list: ListParams,
     help: void,
 };
 
@@ -13,6 +14,10 @@ pub const AddParams = struct {
     cwd: []const u8,
     exit_code: i32,
     duration: i64,
+};
+
+pub const ListParams = struct {
+    count: usize = 5,
 };
 
 pub fn parse(allocator: std.mem.Allocator) !Action {
@@ -31,6 +36,8 @@ pub fn parse(allocator: std.mem.Allocator) !Action {
         return .import;
     } else if (std.mem.eql(u8, command, "stats")) {
         return .stats;
+    } else if (std.mem.eql(u8, command, "list")) {
+        return parseList(allocator, &iter);
     } else if (std.mem.eql(u8, command, "-h") or std.mem.eql(u8, command, "--help")) {
         return .help;
     }
@@ -68,6 +75,23 @@ fn parseAdd(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !Actio
             .cwd = cwd.?,
             .exit_code = exit_code,
             .duration = duration,
+        },
+    };
+}
+
+fn parseList(_: std.mem.Allocator, iter: *std.process.ArgIterator) !Action {
+    // Default count is 5
+    var count: usize = 5;
+
+    // Check if count is provided
+    const count_arg = iter.next();
+    if (count_arg) |arg| {
+        count = try std.fmt.parseInt(usize, arg, 10);
+    }
+
+    return Action{
+        .list = .{
+            .count = count,
         },
     };
 }
