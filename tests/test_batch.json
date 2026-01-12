@@ -1,0 +1,20 @@
+[
+  {
+    "cmd": "echo hello",
+    "cwd": "C:\\test",
+    "exit_code": 0,
+    "duration_ms": 100
+  },
+  {
+    "cmd": "git status",
+    "cwd": "C:\\test",
+    "exit_code": 1,
+    "duration_ms": 200
+  },
+  {
+    "cmd": "ls -la",
+    "cwd": "C:\\test",
+    "exit_code": 0,
+    "duration_ms": 50
+  }
+]
