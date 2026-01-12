@@ -1,74 +1,45 @@
-# zigstory PowerShell Profile Integration
-# Simple version - no batching, no timers, no async
-# Just immediate detached writes using cmd /c start
+# zigstory Diagnostic Profile - logs everything
 
-# Configuration
-$Global:ZigstoryBin = "$PSScriptRoot\..\zig-out\bin\zigstory.exe"
+$script:logFile = "C:\temp\zigstory_debug.log"
 
-# Commands to skip
-$Global:ZigstorySkipPatterns = @(
-    '^\s*$', '^[a-zA-Z]:$', '^exit$', '^cd\s+$',
-    '^cd \.$', '^pwd$', '^cls$', '^clear$', '^$'
-)
-
-function Global:ZigstoryShouldRecord($cmd) {
-    $trimmedCmd = $cmd.Trim()
-    if ([string]::IsNullOrWhiteSpace($trimmedCmd)) { return $false }
-    foreach ($pattern in $Global:ZigstorySkipPatterns) {
-        if ($trimmedCmd -match $pattern) { return $false }
-    }
-    return $true
+function Write-Log($msg) {
+    $timestamp = Get-Date -Format "HH:mm:ss.fff"
+    Add-Content -Path $script:logFile -Value "[$timestamp] $msg" -Encoding utf8
 }
 
-# Write command asynchronously (truly detached)
-function Global:ZigstoryRecordCommand($cmd, $cwd, $exitCode, $duration) {
-    # Build temp JSON
-    $tempFile = [System.IO.Path]::GetTempFileName()
-    $cmdEsc = $cmd -replace '\\', '\\' -replace '"', '\"'
-    $cwdEsc = $cwd -replace '\\', '\\'
-    $json = "[{`"cmd`":`"$cmdEsc`",`"cwd`":`"$cwdEsc`",`"exit_code`":$exitCode,`"duration_ms`":$duration}]"
-
-    # Write to temp file
-    $utf8 = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($tempFile, $json, $utf8)
-
-    # Detached execution - no waiting at all
-    $arg = "import --file `"$tempFile`""
-    Start-Process cmd.exe -ArgumentList "/c", "start /b /min zigstory.exe $arg" -WindowStyle Hidden
-}
-
-# Save prompt
-if ($null -eq $Global:ZigstoryOldPrompt) {
-    if (Test-Path Function:\Prompt) {
-        $Global:ZigstoryOldPrompt = $ExecutionContext.InvokeCommand.GetCommand('Prompt', 'Function')
-    }
-}
-
-$Global:ZigstoryLastHistoryId = -1
+Write-Log "Profile loaded"
+Write-Log "Prompt function defined"
 
 function Global:Prompt {
-    $lastHistory = Get-History -Count 1 -ErrorAction SilentlyContinue
+    Write-Log "Prompt called - START"
 
-    if ($lastHistory -and $lastHistory.Id -ne $Global:ZigstoryLastHistoryId) {
-        $Global:ZigstoryLastHistoryId = $lastHistory.Id
+    try {
+        $hist = Get-History -Count 1 -ErrorAction SilentlyContinue
+        Write-Log "  Get-History completed, Id: $($hist?.Id)"
 
-        try {
-            if (ZigstoryShouldRecord $lastHistory.CommandLine) {
-                $duration = [int]$lastHistory.Duration.TotalMilliseconds
-                $exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
-                $cwd = $PWD.ProviderPath
+        if ($hist -and $hist.Id -ne $Global:LastId) {
+            $Global:LastId = $hist.Id
+            Write-Log "  New command detected: $($hist.CommandLine)"
 
-                ZigstoryRecordCommand $lastHistory.CommandLine $cwd $exitCode $duration
-            }
+            # Just queue - no write
+            $cmd = $hist.CommandLine
+            $cwd = $PWD.Path
+            $exit = $LASTEXITCODE
+            $dur = [int]$hist.Duration.TotalMilliseconds
+
+            Write-Log "  Would record: cmd=$cmd, cwd=$cwd, exit=$exit, dur=$dur"
+        } else {
+            Write-Log "  No new command or duplicate"
         }
-        catch {}
+    } catch {
+        Write-Log "  ERROR in Prompt: $_"
     }
 
-    if ($Global:ZigstoryOldPrompt) {
-        & $Global:ZigstoryOldPrompt
-    } else {
-        "PS $PWD> "
-    }
+    Write-Log "Prompt called - END"
+
+    # Return prompt
+    "PS $PWD> "
 }
 
-Write-Host "zigstory enabled (detached writes)" -ForegroundColor Green
+Write-Log "Ready to use - type 'ls' to test, then check log file"
+Write-Host "zigstory diagnostic mode - logging to: $script:logFile" -ForegroundColor Yellow
