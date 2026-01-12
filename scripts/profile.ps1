@@ -46,7 +46,9 @@ if ($null -eq $Global:ZigstoryOldPromptScriptBlock) {
     }
 }
 
-$Global:ZigstoryLastHistoryId = -1
+if ($null -eq $Global:ZigstoryLastHistoryId) {
+    $Global:ZigstoryLastHistoryId = -1
+}
 
 function Global:Prompt {
     # Get history silently - no output
