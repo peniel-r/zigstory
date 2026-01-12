@@ -75,3 +75,24 @@ function Global:Prompt {
 }
 
 Write-Host "zigstory enabled (detached writes)" -ForegroundColor Green
+
+# Load zigstory predictor assembly
+$zigstoryPath = "f:\sandbox\zigstory\src\predictor\bin\publish"
+if (Test-Path "$zigstoryPath\zigstoryPredictor.dll") {
+    Add-Type -Path "$zigstoryPath\zigstoryPredictor.dll"
+
+    # Only register if not already registered (prevents error if profile is re-sourced)
+    $predictorId = "a8c5e3f1-2b4d-4e9a-8f1c-3d5e7b9a1c2f"
+    $existing = Get-PSSubsystem -Kind CommandPredictor | Where-Object { $_.Id -eq $predictorId }
+
+    if (-not $existing) {
+        [System.Management.Automation.Subsystem.SubsystemManager]::RegisterSubsystem(
+            [System.Management.Automation.Subsystem.SubsystemKind]::CommandPredictor,
+            [zigstoryPredictor.ZigstoryPredictor]::new()
+        )
+    }
+
+    # Enable predictive IntelliSense
+    Set-PSReadLineOption -PredictionSource Plugin
+    Set-PSReadLineOption -PredictionViewStyle ListView
+}

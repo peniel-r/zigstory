@@ -13,4 +13,8 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.11" />
   </ItemGroup>
 
+  <Target Name="CopyNativeSqlite" AfterTargets="Publish">
+    <Copy SourceFiles="$(PublishDir)runtimes\win-x64\native\e_sqlite3.dll" DestinationFolder="$(PublishDir)" Condition="Exists('$(PublishDir)runtimes\win-x64\native\e_sqlite3.dll')" />
+  </Target>
+
 </Project>
