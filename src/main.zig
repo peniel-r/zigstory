@@ -71,7 +71,7 @@ pub fn main() !void {
         .search => {
             std.debug.print("SEARCH command\n", .{});
         },
-        .import => {
+        .import => |args| {
             // Get or create default database path
             const home_dir = std.process.getEnvVarOwned(allocator, "USERPROFILE") catch |err| blk: {
                 if (err == error.EnvironmentVariableNotFound) {
@@ -109,16 +109,26 @@ pub fn main() !void {
             const cwd_buffer = try std.process.getCwdAlloc(allocator);
             defer allocator.free(cwd_buffer);
 
-            // Import history
-            const result = import_history.importHistory(&db, cwd_buffer, allocator) catch |err| {
-                std.debug.print("Error importing history: {}\n", .{err});
-                std.process.exit(1);
-            };
-
-            std.debug.print("\nImport complete!\n", .{});
-            std.debug.print("Total commands in file: {}\n", .{result.total});
-            std.debug.print("Imported: {}\n", .{result.imported});
-            std.debug.print("Skipped (duplicates): {}\n", .{result.skipped});
+            // Import from file if specified, otherwise import from PowerShell history
+            if (args.file) |file_path| {
+                defer allocator.free(file_path);
+                const result = import_history.importFromFile(&db, file_path, cwd_buffer, allocator) catch |err| {
+                    std.debug.print("Error importing from file: {}\n", .{err});
+                    std.process.exit(1);
+                };
+                std.debug.print("\nImport complete!\n", .{});
+                std.debug.print("Total commands in file: {}\n", .{result.total});
+                std.debug.print("Imported: {}\n", .{result.imported});
+            } else {
+                const result = import_history.importHistory(&db, cwd_buffer, allocator) catch |err| {
+                    std.debug.print("Error importing history: {}\n", .{err});
+                    std.process.exit(1);
+                };
+                std.debug.print("\nImport complete!\n", .{});
+                std.debug.print("Total commands in file: {}\n", .{result.total});
+                std.debug.print("Imported: {}\n", .{result.imported});
+                std.debug.print("Skipped (duplicates): {}\n", .{result.skipped});
+            }
         },
         .stats => {
             std.debug.print("STATS command\n", .{});

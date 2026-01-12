@@ -28,7 +28,7 @@ fn validatePath(cwd: []const u8) !void {
 }
 
 /// Generates a UUID v4 session ID
-fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
+pub fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
     var random = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
     const rand = random.random();
 
@@ -51,7 +51,7 @@ fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
 }
 
 /// Gets the system hostname
-fn getHostname(allocator: std.mem.Allocator) ![]const u8 {
+pub fn getHostname(allocator: std.mem.Allocator) ![]const u8 {
     // Try environment variables first (works on both Windows and Unix)
     if (std.process.getEnvVarOwned(allocator, "COMPUTERNAME")) |name| {
         return name;

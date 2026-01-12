@@ -3,7 +3,7 @@ const std = @import("std");
 pub const Action = union(enum) {
     add: AddParams,
     search: void,
-    import: void,
+    import: ImportParams,
     stats: void,
     list: ListParams,
     help: void,
@@ -20,6 +20,10 @@ pub const ListParams = struct {
     count: usize = 5,
 };
 
+pub const ImportParams = struct {
+    file: ?[]const u8 = null,
+};
+
 pub fn parse(allocator: std.mem.Allocator) !Action {
     var iter = try std.process.argsWithAllocator(allocator);
     defer iter.deinit();
@@ -33,7 +37,7 @@ pub fn parse(allocator: std.mem.Allocator) !Action {
     } else if (std.mem.eql(u8, command, "search")) {
         return .search;
     } else if (std.mem.eql(u8, command, "import")) {
-        return .import;
+        return parseImport(allocator, &iter);
     } else if (std.mem.eql(u8, command, "stats")) {
         return .stats;
     } else if (std.mem.eql(u8, command, "list")) {
@@ -92,6 +96,22 @@ fn parseList(_: std.mem.Allocator, iter: *std.process.ArgIterator) !Action {
     return Action{
         .list = .{
             .count = count,
+        },
+    };
+}
+
+fn parseImport(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !Action {
+    var file: ?[]const u8 = null;
+
+    while (iter.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--file") or std.mem.eql(u8, arg, "-f")) {
+            file = try allocator.dupe(u8, iter.next() orelse return error.MissingArgValue);
+        }
+    }
+
+    return Action{
+        .import = .{
+            .file = file,
         },
     };
 }

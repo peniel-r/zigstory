@@ -149,6 +149,128 @@ pub fn isDuplicate(db: *sqlite.Db, cmd: []const u8, cwd: []const u8, timestamp: 
     return count > 0;
 }
 
+/// JSON entry structure for batch import
+const JsonEntry = struct {
+    cmd: []const u8,
+    cwd: []const u8,
+    exit_code: i32,
+    duration_ms: i64,
+};
+
+/// Import from JSON file (for batch writes from PowerShell)
+pub fn importFromFile(
+    db: *sqlite.Db,
+    file_path: []const u8,
+    default_cwd: []const u8,
+    allocator: std.mem.Allocator,
+) !struct {
+    total: usize,
+    imported: usize,
+} {
+    // Read JSON file
+    var file = try std.fs.cwd().openFile(file_path, .{});
+    defer file.close();
+
+    const file_size = try file.getEndPos();
+    const json_data = try allocator.alloc(u8, file_size);
+    defer allocator.free(json_data);
+
+    const bytes_read = try file.readAll(json_data);
+    if (bytes_read != file_size) {
+        return error.ReadError;
+    }
+
+    // Parse JSON
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_data, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    if (parsed.value != std.json.Value.array) {
+        return error.InvalidJsonFormat;
+    }
+
+    const array = parsed.value.array;
+
+    // Prepare session ID and hostname for all entries
+    const add_mod = @import("add.zig");
+    const session_id = try add_mod.generateSessionId(allocator);
+    defer allocator.free(session_id);
+
+    const hostname = try add_mod.getHostname(allocator);
+    defer allocator.free(hostname);
+
+    // Batch insert
+    var imported: usize = 0;
+
+    // Use transaction for better performance
+    {
+        var begin_stmt = try db.prepare("BEGIN TRANSACTION");
+        defer begin_stmt.deinit();
+        try begin_stmt.exec(.{}, .{});
+    }
+    errdefer {
+        var rollback_stmt = db.prepare("ROLLBACK") catch unreachable;
+        defer rollback_stmt.deinit();
+        rollback_stmt.exec(.{}, .{}) catch {};
+    }
+
+    const query =
+        \\INSERT INTO history (cmd, cwd, exit_code, duration_ms, session_id, hostname, timestamp)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?)
+    ;
+
+    var stmt = try db.prepare(query);
+    defer stmt.deinit();
+
+    const timestamp = std.time.timestamp();
+
+    for (array.items) |item| {
+        if (item != .object) {
+            continue;
+        }
+
+        const obj = item.object;
+
+        // Extract fields
+        const cmd = obj.get("cmd") orelse continue;
+        const cmd_str = if (cmd == .string) cmd.string else continue;
+
+        const cwd_obj = obj.get("cwd");
+        const cwd_str = if (cwd_obj) |c| (if (c == .string) c.string else null) else null;
+        const cwd_final = if (cwd_str) |s| s else default_cwd;
+
+        const exit_code_obj = obj.get("exit_code");
+        const exit_code = if (exit_code_obj) |e| (if (e == .integer) @as(i32, @intCast(e.integer)) else 0) else 0;
+
+        const duration_ms_obj = obj.get("duration_ms");
+        const duration_ms = if (duration_ms_obj) |d| (if (d == .integer) @as(i64, @intCast(d.integer)) else 0) else 0;
+
+        // Insert into database
+        try stmt.exec(.{}, .{
+            .cmd = cmd_str,
+            .cwd = cwd_final,
+            .exit_code = exit_code,
+            .duration_ms = duration_ms,
+            .session_id = session_id,
+            .hostname = hostname,
+            .timestamp = timestamp,
+        });
+        stmt.reset();
+        imported += 1;
+    }
+
+    // Commit transaction
+    {
+        var commit_stmt = try db.prepare("COMMIT");
+        defer commit_stmt.deinit();
+        try commit_stmt.exec(.{}, .{});
+    }
+
+    return .{
+        .total = array.items.len,
+        .imported = imported,
+    };
+}
+
 /// Import history entries into the database
 /// Returns the number of entries imported
 pub fn importHistory(
