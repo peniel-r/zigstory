@@ -28,19 +28,26 @@ Add the following to your PowerShell profile (`$PROFILE`):
 
 ```powershell
 # Load zigstory predictor assembly
-$zigstoryPath = "C:\path\to\zigstory\src\predictor\bin\publish"
-Add-Type -Path "$zigstoryPath\zigstoryPredictor.dll"
+# (Update this path to your actual installation location)
+$zigstoryPath = "f:\sandbox\zigstory\src\predictor\bin\publish"
+if (Test-Path "$zigstoryPath\zigstoryPredictor.dll") {
+    Add-Type -Path "$zigstoryPath\zigstoryPredictor.dll"
 
-# Register the predictor with PSReadLine subsystem
-$predictorType = [zigstoryPredictor.ZigstoryPredictor]
-[System.Management.Automation.Subsystem.SubsystemManager]::RegisterSubsystem(
-    [System.Management.Automation.Subsystem.SubsystemKind]::CommandPredictor,
-    [zigstoryPredictor.ZigstoryPredictor]::new()
-)
+    # Only register if not already registered (prevents error if profile is re-sourced)
+    $predictorId = "a8c5e3f1-2b4d-4e9a-8f1c-3d5e7b9a1c2f"
+    $existing = Get-PSSubsystem -Kind CommandPredictor | Where-Object { $_.Id -eq $predictorId }
 
-# Enable predictive IntelliSense
-Set-PSReadLineOption -PredictionSource HistoryAndPlugin
-Set-PSReadLineOption -PredictionViewStyle ListView
+    if (-not $existing) {
+        [System.Management.Automation.Subsystem.SubsystemManager]::RegisterSubsystem(
+            [System.Management.Automation.Subsystem.SubsystemKind]::CommandPredictor,
+            [zigstoryPredictor.ZigstoryPredictor]::new()
+        )
+    }
+
+    # Enable predictive IntelliSense
+    Set-PSReadLineOption -PredictionSource HistoryAndPlugin
+    Set-PSReadLineOption -PredictionViewStyle ListView
+}
 ```
 
 ### Step 3: Verify Installation
