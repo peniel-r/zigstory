@@ -1,9 +1,14 @@
 const std = @import("std");
 const zigstory = @import("zigstory");
 const sqlite = @import("sqlite");
+const vaxis = @import("vaxis");
 const add = @import("cli/add.zig");
 const import_history = @import("cli/import.zig");
 const list_history = @import("cli/list.zig");
+const tui = @import("tui/main.zig");
+
+// Use libvaxis panic handler for proper terminal cleanup
+pub const panic = vaxis.panic_handler;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -69,7 +74,49 @@ pub fn main() !void {
             std.debug.print("Command added successfully\n", .{});
         },
         .search => {
-            std.debug.print("SEARCH command\n", .{});
+            // Get or create default database path
+            const home_dir = std.process.getEnvVarOwned(allocator, "USERPROFILE") catch |err| blk: {
+                if (err == error.EnvironmentVariableNotFound) {
+                    break :blk std.process.getEnvVarOwned(allocator, "HOME") catch {
+                        std.debug.print("Error: Could not determine home directory\n", .{});
+                        std.process.exit(1);
+                    };
+                }
+                std.debug.print("Error getting home directory: {}\n", .{err});
+                std.process.exit(1);
+            };
+            defer allocator.free(home_dir);
+
+            const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
+            defer allocator.free(db_path);
+
+            // Ensure directory exists
+            const db_dir = std.fs.path.dirname(db_path) orelse ".";
+            std.fs.cwd().makePath(db_dir) catch |err| {
+                std.debug.print("Error creating database directory: {}\n", .{err});
+                std.process.exit(1);
+            };
+
+            const db_path_z = try allocator.dupeZ(u8, db_path);
+            defer allocator.free(db_path_z);
+
+            // Initialize database
+            var db = zigstory.db.initDb(db_path_z) catch |err| {
+                std.debug.print("Error initializing database: {}\n", .{err});
+                std.process.exit(1);
+            };
+            defer db.deinit();
+
+            // Launch TUI search interface
+            const result = tui.search(allocator) catch |err| {
+                std.debug.print("Error launching TUI: {}\n", .{err});
+                std.process.exit(1);
+            };
+
+            if (result) |cmd| {
+                std.debug.print("{s}\n", .{cmd});
+                allocator.free(cmd);
+            }
         },
         .import => |args| {
             // Get or create default database path
