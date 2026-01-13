@@ -3,7 +3,7 @@
 # Just immediate detached writes using cmd /c start
 
 # Configuration
-$Global:ZigstoryBin = "F:\sandbox\zigstory\zig-out\bin\zigstory.exe"
+$Global:ZigstoryBin = "C:\git\zigstory\zig-out\bin\zigstory.exe"
 
 # Commands to skip
 $Global:ZigstorySkipPatterns = @(
@@ -77,7 +77,7 @@ function Global:Prompt {
 Write-Host "zigstory enabled (detached writes)" -ForegroundColor Green
 
 # Load zigstory predictor assembly
-$zigstoryPath = "f:\sandbox\zigstory\src\predictor\bin\publish"
+$zigstoryPath = "C:\git\zigstory\src\predictor\bin\publish"
 if (Test-Path "$zigstoryPath\zigstoryPredictor.dll") {
     Add-Type -Path "$zigstoryPath\zigstoryPredictor.dll"
 
