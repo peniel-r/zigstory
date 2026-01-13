@@ -1,9 +1,8 @@
 # zigstory PowerShell Profile Integration
-# Simple version - no batching, no timers, no async
-# Just immediate detached writes using cmd /c start
 
-# Configuration
-$Global:ZigstoryBin = "C:\git\zigstory\zig-out\bin\zigstory.exe"
+# Resolve paths relative to this script
+$RepoRoot = Resolve-Path "$PSScriptRoot\.."
+$Global:ZigstoryBin = Join-Path $RepoRoot "zig-out\bin\zigstory.exe"
 
 # Commands to skip
 $Global:ZigstorySkipPatterns = @(
@@ -22,6 +21,8 @@ function Global:ZigstoryShouldRecord($cmd) {
 
 # Write command asynchronously (truly detached)
 function Global:ZigstoryRecordCommand($cmd, $cwd, $exitCode, $duration) {
+    if (-not (Test-Path $Global:ZigstoryBin)) { return }
+
     # Build temp JSON
     $tempFile = [System.IO.Path]::GetTempFileName()
     $cmdEsc = $cmd -replace '\\', '\\' -replace '"', '\"'
@@ -77,10 +78,26 @@ function Global:Prompt {
 Write-Host "zigstory enabled (detached writes)" -ForegroundColor Green
 
 # Load zigstory predictor assembly
-$zigstoryPath = "C:\git\zigstory\src\predictor\bin\publish"
-if (Test-Path "$zigstoryPath\zigstoryPredictor.dll") {
-    Add-Type -Path "$zigstoryPath\zigstoryPredictor.dll"
+# Check both Release (dev) and publish (release) locations
+$possibleDllPaths = @(
+    (Join-Path $RepoRoot "src\predictor\bin\Release\net8.0\zigstoryPredictor.dll"),
+    (Join-Path $RepoRoot "src\predictor\bin\publish\zigstoryPredictor.dll")
+)
 
+$dllLoaded = $false
+foreach ($dllPath in $possibleDllPaths) {
+    if (Test-Path $dllPath) {
+        try {
+            Add-Type -Path $dllPath
+            $dllLoaded = $true
+            break
+        } catch {
+            Write-Warning "Failed to load zigstory predictor from $dllPath"
+        }
+    }
+}
+
+if ($dllLoaded) {
     # Only register if not already registered (prevents error if profile is re-sourced)
     $predictorId = "a8c5e3f1-2b4d-4e9a-8f1c-3d5e7b9a1c2f"
     $existing = Get-PSSubsystem -Kind CommandPredictor | Where-Object { $_.Id -eq $predictorId }
