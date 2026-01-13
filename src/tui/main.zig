@@ -23,6 +23,7 @@ const Event = union(enum) {
 /// TUI application state
 const TuiApp = struct {
     allocator: std.mem.Allocator,
+    buffer: [1024]u8,
     tty: vaxis.Tty,
     vx: vaxis.Vaxis,
     loop: vaxis.Loop(Event),
@@ -31,13 +32,14 @@ const TuiApp = struct {
 
     /// Initialize the TUI application
     pub fn init(allocator: std.mem.Allocator) !TuiApp {
-        var tty = try vaxis.Tty.init();
+        var buffer: [1024]u8 = undefined;
+        var tty = try vaxis.Tty.init(&buffer);
         errdefer tty.deinit();
 
         var vx = try vaxis.init(allocator, .{
             .kitty_keyboard_flags = .{ .report_events = true },
         });
-        errdefer vx.deinit(allocator, tty.anyWriter());
+        errdefer vx.deinit(allocator, tty.writer());
 
         var loop: vaxis.Loop(Event) = .{
             .tty = &tty,
@@ -48,6 +50,7 @@ const TuiApp = struct {
 
         return TuiApp{
             .allocator = allocator,
+            .buffer = buffer,
             .tty = tty,
             .vx = vx,
             .loop = loop,
@@ -59,8 +62,8 @@ const TuiApp = struct {
         try self.loop.start();
         defer self.loop.stop();
 
-        try self.vx.enterAltScreen(self.tty.anyWriter());
-        try self.vx.queryTerminal(self.tty.anyWriter(), 1 * std.time.ns_per_s);
+        try self.vx.enterAltScreen(self.tty.writer());
+        try self.vx.queryTerminal(self.tty.writer(), 1 * std.time.ns_per_s);
 
         // Main event loop
         while (!self.should_quit) {
@@ -72,9 +75,8 @@ const TuiApp = struct {
 
             self.draw();
 
-            var buffered = self.tty.bufferedWriter();
-            try self.vx.render(buffered.writer().any());
-            try buffered.flush();
+            try self.vx.render(self.tty.writer());
+            try self.tty.writer().flush();
         }
     }
 
@@ -96,7 +98,7 @@ const TuiApp = struct {
             },
             .winsize => |ws| {
                 // Handle terminal resize
-                try self.vx.resize(self.allocator, self.tty.anyWriter(), ws);
+                try self.vx.resize(self.allocator, self.tty.writer(), ws);
             },
             else => {
                 // Ignore other events for now
@@ -109,58 +111,24 @@ const TuiApp = struct {
         const win = self.vx.window();
         win.clear();
 
-        // Draw title bar
+        // Simple test drawing - title at top
         const title = "zigstory - Command History Search";
-        const title_len = @as(usize, @intCast(title.len));
-
-        const child = win.child(.{
-            .x_off = @as(usize, @intCast((win.width -| title_len) / 2)),
-            .y_off = 0,
-            .width = .{ .limit = title_len },
-            .height = .{ .limit = 1 },
-        });
-
-        _ = child.printSegment(.{
+        _ = win.printSegment(.{
             .text = title,
             .style = .{ .fg = .{ .index = 5 } }, // Magenta color
         }, .{});
 
-        // Draw help text
+        // Help text at bottom
         const help_text = "Press Ctrl+C or Escape to exit";
-        const help_len = @as(usize, @intCast(help_text.len));
-
-        const help_child = win.child(.{
-            .x_off = @as(usize, @intCast((win.width -| help_len) / 2)),
-            .y_off = win.height -| 1,
-            .width = .{ .limit = help_len },
-            .height = .{ .limit = 1 },
-        });
-
-        _ = help_child.printSegment(.{
+        _ = win.printSegment(.{
             .text = help_text,
-            .style = .{ .dim = true },
-        }, .{});
-
-        // Draw placeholder for search results
-        const placeholder = "Search results will appear here (Task 4.2-4.5)";
-        const placeholder_len = @as(usize, @intCast(placeholder.len));
-
-        const placeholder_child = win.child(.{
-            .x_off = @as(usize, @intCast((win.width -| placeholder_len) / 2)),
-            .y_off = win.height / 2,
-            .width = .{ .limit = placeholder_len },
-            .height = .{ .limit = 1 },
-        });
-
-        _ = placeholder_child.printSegment(.{
-            .text = placeholder,
             .style = .{ .dim = true },
         }, .{});
     }
 
     /// Clean up resources
     pub fn deinit(self: *TuiApp) void {
-        self.vx.deinit(self.allocator, self.tty.anyWriter());
+        self.vx.deinit(self.allocator, self.tty.writer());
         self.tty.deinit();
         self.* = undefined;
     }
