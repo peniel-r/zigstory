@@ -28,48 +28,67 @@ pub const Page = struct {
 pub fn fetchHistoryPage(
     db: *sqlite.Db,
     allocator: std.mem.Allocator,
-    page_size: usize,
+    limit: usize,
     offset: usize,
 ) ![]HistoryEntry {
-    const query = "SELECT id, cmd, cwd, exit_code, duration_ms, timestamp FROM history ORDER BY timestamp DESC LIMIT ? OFFSET ?";
-    const stmt = try db.prepare(query);
+    // Use multiline string for query
+    const query =
+        \\SELECT id, cmd, cwd, exit_code, duration_ms, timestamp 
+        \\FROM history 
+        \\ORDER BY timestamp DESC 
+        \\LIMIT ? OFFSET ?
+    ;
+    var stmt = try db.prepare(query);
     defer stmt.deinit();
 
-    try stmt.bind(1, @intCast(page_size));
-    try stmt.bind(2, @intCast(offset));
+    const QueryRow = struct {
+        id: i64,
+        cmd: []const u8,
+        cwd: []const u8,
+        exit_code: i64,
+        duration_ms: i64,
+        timestamp: i64,
+    };
 
-    var entries = std.ArrayList(HistoryEntry).init(allocator);
-    defer entries.deinit();
+    var iter = try stmt.iterator(QueryRow, .{
+        @as(i64, @intCast(limit)),
+        @as(i64, @intCast(offset)),
+    });
 
-    while (stmt.step()) |_| {
-        const id = stmt.row.i64(0);
-        const cmd = try allocator.dupe(u8, stmt.row.text(1));
-        const cwd = try allocator.dupe(u8, stmt.row.text(2));
-        const exit_code = stmt.row.i64(3);
-        const duration_ms = stmt.row.i64(4);
-        const timestamp = stmt.row.i64(5);
+    // Use a fixed buffer for collecting entries then copy to final slice
+    var temp_entries: [200]HistoryEntry = undefined;
+    var count: usize = 0;
 
-        try entries.append(.{
-            .id = id,
-            .cmd = cmd,
-            .cwd = cwd,
-            .exit_code = exit_code,
-            .duration_ms = duration_ms,
-            .timestamp = timestamp,
-        });
+    while (count < 200) {
+        const row = (try iter.nextAlloc(allocator, .{})) orelse break;
+
+        temp_entries[count] = .{
+            .id = row.id,
+            .cmd = row.cmd,
+            .cwd = row.cwd,
+            .exit_code = row.exit_code,
+            .duration_ms = row.duration_ms,
+            .timestamp = row.timestamp,
+        };
+        count += 1;
     }
 
-    return entries.toOwnedSlice();
+    // Allocate exact size and copy
+    const entries = try allocator.alloc(HistoryEntry, count);
+    @memcpy(entries, temp_entries[0..count]);
+
+    return entries;
 }
 
 /// Get total count of history entries
 pub fn getHistoryCount(db: *sqlite.Db) !usize {
-    const query = "SELECT COUNT(*) FROM history";
-    const stmt = try db.prepare(query);
+    const query = "SELECT COUNT(*) as count FROM history";
+    var stmt = try db.prepare(query);
     defer stmt.deinit();
 
-    const result = stmt.one(usize, .{});
-    return result orelse 0;
+    var iter = try stmt.iterator(struct { count: i64 }, .{});
+    const row = (try iter.next(.{})) orelse return 0;
+    return @intCast(row.count);
 }
 
 /// Scrolling state management

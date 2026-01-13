@@ -108,7 +108,7 @@ pub fn main() !void {
             defer db.deinit();
 
             // Launch TUI search interface
-            const result = tui.search(allocator) catch |err| {
+            const result = tui.search(allocator, &db) catch |err| {
                 std.debug.print("Error launching TUI: {}\n", .{err});
                 std.process.exit(1);
             };
