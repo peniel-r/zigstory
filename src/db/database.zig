@@ -66,11 +66,56 @@ pub fn initDb(path: [:0]const u8) !sqlite.Db {
     , .{}, .{});
 
     // Create FTS5 virtual table for TUI search
-    // Note: FTS5 might not be enabled by default in some builds, but zig-sqlite usually enables it.
-    // If this fails, we might need check build flags.
     try db.exec(
         \\CREATE VIRTUAL TABLE IF NOT EXISTS history_fts USING fts5(cmd, content='history', content_rowid='id');
     , .{}, .{});
+
+    // Triggers to keep FTS5 index in sync
+    try db.exec(
+        \\CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
+        \\  INSERT INTO history_fts(rowid, cmd) VALUES (new.id, new.cmd);
+        \\END;
+        \\CREATE TRIGGER IF NOT EXISTS history_ad AFTER DELETE ON history BEGIN
+        \\  INSERT INTO history_fts(history_fts, rowid, cmd) VALUES('delete', old.id, old.cmd);
+        \\END;
+        \\CREATE TRIGGER IF NOT EXISTS history_au AFTER UPDATE ON history BEGIN
+        \\  INSERT INTO history_fts(history_fts, rowid, cmd) VALUES('delete', old.id, old.cmd);
+        \\  INSERT INTO history_fts(rowid, cmd) VALUES (new.id, new.cmd);
+        \\END;
+    , .{}, .{});
+
+    // Check if rebuild is needed (if history exists but fts is empty)
+    // This handles the case where the table existed before triggers were added
+    // Check for sync issues (count mismatch OR max ID mismatch)
+    var fts_count: i64 = 0;
+    var fts_max: i64 = 0;
+    var history_count: i64 = 0;
+    var history_max: i64 = 0;
+
+    // We can't use db.prepare directly easily for scalar with this library wrapper sometimes,
+    // but let's try standard iterator approach
+    {
+        var stmt = try db.prepare("SELECT count(*) as c, COALESCE(MAX(rowid), 0) as m FROM history_fts");
+        defer stmt.deinit();
+        var iter = try stmt.iterator(struct { c: i64, m: i64 }, .{});
+        if (try iter.next(.{})) |row| {
+            fts_count = row.c;
+            fts_max = row.m;
+        }
+    }
+    {
+        var stmt = try db.prepare("SELECT count(*) as c, COALESCE(MAX(id), 0) as m FROM history");
+        defer stmt.deinit();
+        var iter = try stmt.iterator(struct { c: i64, m: i64 }, .{});
+        if (try iter.next(.{})) |row| {
+            history_count = row.c;
+            history_max = row.m;
+        }
+    }
+
+    if (history_count != fts_count or history_max != fts_max) {
+        try db.exec("INSERT INTO history_fts(history_fts) VALUES('rebuild')", .{}, .{});
+    }
 
     return db;
 }
