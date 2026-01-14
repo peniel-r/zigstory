@@ -828,10 +828,12 @@ Originally implemented with FTS5 full-text search, but switched to direct `LIKE`
 
 ---
 
-#### Task 4.4: UI Rendering
+#### Task 4.4: UI Rendering ✅ COMPLETED
 
 **Action:** Implement column layout and styling  
 **File:** `src/tui/render.zig`  
+**Completion Date:** 2026-01-13
+
 **Column Layout:**
 
 | Column | Position | Style | Condition |
@@ -860,14 +862,33 @@ Originally implemented with FTS5 full-text search, but switched to direct `LIKE`
 - Basic syntax highlighting (optional)
 - Highlight common commands (git, npm, dotnet)
 
+**Implementation Details:**
+
+Created `src/tui/render.zig` (446 lines) with:
+
+- ✅ **Dracula-inspired color palette** with semantic colors:
+  - `fg_primary` (white) - default text
+  - `fg_error` (red) - failed commands
+  - `fg_dimmed` (blue-gray) - timestamps
+  - `fg_duration` (purple) - duration indicators
+  - `fg_directory` (cyan) - directory paths
+  - `fg_highlight` (orange) - search matches
+- ✅ **Column configuration** with dynamic command width calculation
+- ✅ **Relative time formatting** (5s ago, 2m ago, 3h ago, 1d ago, 2w ago, 3mo ago, 1y ago)
+- ✅ **Duration formatting** only when > 1 second ([1.5s], [2m30s], [1h5m])
+- ✅ **Directory truncation** with left-side ellipsis (…git\zigstory)
+- ✅ **Case-insensitive search highlighting** with different styles for selected/unselected rows
+- ✅ **Title bar, status bar, and help bar rendering**
+
 **Verification:**
 
-- All columns render correctly
-- Failed commands displayed in red
-- Duration hides when <1s
-- Directory truncates on overflow
-- Selection indicator visible
-- Terminal resize reflows layout
+- ✅ All columns render correctly
+- ✅ Failed commands displayed in red
+- ✅ Duration hides when <1s
+- ✅ Directory truncates on overflow
+- ✅ Selection indicator visible
+- ✅ Terminal resize reflows layout
+- ✅ Build succeeded (0 errors, 0 warnings)
 
 ---
 
@@ -960,15 +981,15 @@ Set-PSReadLineKeyHandler -Key Ctrl+r -ScriptBlock {
 - [x] `libvaxis` integrated with proper event loop
 - [x] Virtual scrolling loads only visible rows (50-100 per viewport)
 - [x] Row caching maintains smooth scrolling with 1000+ entries
-- [ ] Fuzzy search uses FTS5 with real-time filtering
+- [x] Search uses LIKE query with real-time filtering (FTS5 replaced for reliability)
 - [x] Result count displays correctly
-- [ ] All columns render correctly (Timestamp, Duration, Command, Directory)
-- [ ] Failed commands (`exit_code != 0`) displayed in red
-- [ ] Duration only shows when > 1s
-- [ ] Directory column right-aligned
+- [x] All columns render correctly (Timestamp, Duration, Command, Directory)
+- [x] Failed commands (`exit_code != 0`) displayed in red
+- [x] Duration only shows when > 1s
+- [x] Directory column right-aligned
 - [ ] All keyboard shortcuts work (arrows, Home/End, Page Up/Down, Ctrl+R)
-- [ ] Selection indicator visible
-- [ ] Terminal resize updates viewport correctly
+- [x] Selection indicator visible
+- [x] Terminal resize updates viewport correctly
 - [ ] Selected command prints to stdout and exits
 - [ ] Ctrl+R in PowerShell launches TUI and executes selected command
 - [ ] Memory usage <50MB with 10,000 history entries

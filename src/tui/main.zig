@@ -3,6 +3,7 @@ const vaxis = @import("vaxis");
 const sqlite = @import("sqlite");
 const scrolling = @import("scrolling.zig");
 const search_logic = @import("search.zig");
+const render = @import("render.zig");
 
 /// Custom panic handler for proper terminal cleanup
 pub const panic = vaxis.panic_handler;
@@ -25,6 +26,7 @@ const Event = union(enum) {
 /// TUI application state
 const TuiApp = struct {
     allocator: std.mem.Allocator,
+    arena: std.heap.ArenaAllocator,
     buffer: [1024]u8,
     tty: vaxis.Tty,
     vx: vaxis.Vaxis,
@@ -82,6 +84,7 @@ const TuiApp = struct {
 
         return TuiApp{
             .allocator = allocator,
+            .arena = std.heap.ArenaAllocator.init(allocator),
             .buffer = buffer,
             .tty = tty,
             .vx = vx,
@@ -102,13 +105,16 @@ const TuiApp = struct {
 
         // Main event loop
         while (!self.should_quit) {
+            _ = self.arena.reset(.retain_capacity);
+            const frame_allocator = self.arena.allocator();
+
             self.loop.pollEvent();
 
             while (self.loop.tryEvent()) |event| {
                 try self.handleEvent(event);
             }
 
-            self.draw();
+            try self.draw(frame_allocator);
 
             try self.vx.render(self.tty.writer());
             try self.tty.writer().flush();
@@ -252,48 +258,33 @@ const TuiApp = struct {
     }
 
     /// Draw the TUI interface
-    fn draw(self: *TuiApp) void {
+    /// Draw the TUI interface
+    fn draw(self: *TuiApp, allocator: std.mem.Allocator) !void {
         const win = self.vx.window();
-        win.clear();
+
+        // IMPORTANT: Fill entire screen with background color FIRST
+        // This ensures no transparency shows through
+        render.fillScreen(win);
 
         // Update visible rows
         self.scroll_state.visible_rows = scrolling.ScrollingState.calculateViewport(win.height);
 
-        // Title bar
-        const title = " zigstory - Command History Search ";
-        const title_style = vaxis.Style{
-            .fg = .{ .rgb = .{ 0, 0, 0 } },
-            .bg = .{ .rgb = .{ 138, 180, 248 } },
-            .bold = true,
-        };
+        // Render title bar (row 0)
+        render.renderTitleBar(win);
 
-        const title_start: u16 = if (win.width > title.len) @intCast((win.width - title.len) / 2) else 0;
-        for (0..win.width) |x| {
-            _ = win.printSegment(.{ .text = " ", .style = title_style }, .{ .col_offset = @intCast(x), .row_offset = 0 });
-        }
-        _ = win.printSegment(.{ .text = title, .style = title_style }, .{ .col_offset = title_start, .row_offset = 0 });
+        // Render status/search bar (row 1)
+        const search_query = self.search_state.query.items;
+        try render.renderStatusBar(
+            win,
+            allocator,
+            self.isSearching(),
+            search_query,
+            self.scroll_state.total_count,
+            self.selected_index,
+            self.search_state.results.len,
+        );
 
-        // Search Input / Status line (row 1)
-        // If searching, show query. Else show status.
-        var status_buf: [256]u8 = undefined;
-        var status_text: []const u8 = "";
-
-        if (self.isSearching()) {
-            status_text = std.fmt.bufPrint(&status_buf, " Search: {s}_ ", .{self.search_state.query.items}) catch " Error ";
-        } else {
-            status_text = std.fmt.bufPrint(&status_buf, " {d} commands | Position: {d}/{d} | Type to search ", .{
-                self.scroll_state.total_count,
-                self.selected_index + 1,
-                self.scroll_state.total_count,
-            }) catch " Error ";
-        }
-
-        _ = win.printSegment(.{
-            .text = status_text,
-            .style = .{ .dim = false, .bold = true, .fg = .{ .rgb = .{ 80, 250, 123 } } },
-        }, .{ .row_offset = 1 });
-
-        // Draw entries
+        // Draw entries starting at row 2
         const start_row: u16 = 2;
 
         // Determine entries to display
@@ -319,73 +310,35 @@ const TuiApp = struct {
 
         const visible_count = @min(display_slice.len, self.scroll_state.visible_rows);
 
+        // Render each entry row
         for (0..visible_count) |i| {
             const entry = display_slice[i];
             const global_index = start_index + i;
             const is_selected = global_index == self.selected_index;
             const row: u16 = start_row + @as(u16, @intCast(i));
 
-            const max_cmd_len = @max(1, win.width -| 4);
-            var display_cmd = entry.cmd;
-            if (display_cmd.len > max_cmd_len) display_cmd = display_cmd[0..max_cmd_len];
+            // Get search query for highlighting (only if searching)
+            const query_for_highlight: ?[]const u8 = if (self.isSearching()) self.search_state.query.items else null;
 
-            // Style
-            const style = if (is_selected)
-                vaxis.Style{ .fg = .{ .rgb = .{ 0, 0, 0 } }, .bg = .{ .rgb = .{ 98, 114, 164 } }, .bold = true }
-            else
-                vaxis.Style{ .fg = .{ .rgb = .{ 248, 248, 242 } } };
-
-            const indicator = if (is_selected) "▶ " else "  ";
-            _ = win.printSegment(.{ .text = indicator, .style = style }, .{ .row_offset = row, .col_offset = 0 });
-
-            // Highlight match if searching
-            // Simple approach: print matches in different color
-            if (self.isSearching()) {
-                // Basic drawing with substring highlight
-                const query = self.search_state.query.items;
-                // TODO: Better case-insensitive find
-                const found = std.mem.indexOf(u8, display_cmd, query);
-
-                if (found) |idx| {
-                    // Pre-match
-                    if (idx > 0) {
-                        _ = win.printSegment(.{ .text = display_cmd[0..idx], .style = style }, .{ .row_offset = row, .col_offset = 2 });
-                    }
-                    // Match
-                    const match_style = if (is_selected) style else vaxis.Style{ .fg = .{ .rgb = .{ 255, 184, 108 } }, .bold = true };
-                    _ = win.printSegment(.{ .text = display_cmd[idx .. idx + query.len], .style = match_style }, .{ .row_offset = row, .col_offset = @as(u16, @intCast(2 + idx)) });
-
-                    // Post-match
-                    if (idx + query.len < display_cmd.len) {
-                        _ = win.printSegment(.{ .text = display_cmd[idx + query.len ..], .style = style }, .{ .row_offset = row, .col_offset = @as(u16, @intCast(2 + idx + query.len)) });
-                    }
-                } else {
-                    _ = win.printSegment(.{ .text = display_cmd, .style = style }, .{ .row_offset = row, .col_offset = 2 });
-                }
-            } else {
-                _ = win.printSegment(.{ .text = display_cmd, .style = style }, .{ .row_offset = row, .col_offset = 2 });
-            }
-
-            // Fill rest
-            if (is_selected) {
-                const remaining = win.width -| (display_cmd.len + 2);
-                for (0..remaining) |x| {
-                    _ = win.printSegment(.{ .text = " ", .style = style }, .{ .row_offset = row, .col_offset = @as(u16, @intCast(display_cmd.len + 2 + x)) });
-                }
-            }
+            // Render the entry using the render module
+            try render.renderEntry(
+                win,
+                allocator,
+                entry,
+                row,
+                is_selected,
+                query_for_highlight,
+                render.default_config,
+            );
         }
 
-        // Help text
-        const help_row: u16 = @intCast(win.height -| 1);
-        const help_text = " ↑/↓:Navigate  Enter:Select  Esc:Clear/Back  Type to Search ";
-        _ = win.printSegment(.{
-            .text = help_text,
-            .style = .{ .dim = true, .bg = .{ .rgb = .{ 40, 42, 54 } } },
-        }, .{ .row_offset = help_row });
+        // Render help bar at bottom
+        render.renderHelpBar(win);
     }
 
     /// Clean up resources
     pub fn deinit(self: *TuiApp) void {
+        self.arena.deinit();
         self.search_state.deinit(self.allocator);
         self.vx.deinit(self.allocator, self.tty.writer());
         self.tty.deinit();
