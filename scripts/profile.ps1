@@ -113,3 +113,21 @@ if ($dllLoaded) {
     Set-PSReadLineOption -PredictionSource Plugin
     Set-PSReadLineOption -PredictionViewStyle ListView
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Interactive History Search (TUI)
+# ─────────────────────────────────────────────────────────────────────────────
+
+if (Test-Path $Global:ZigstoryBin) {
+    # Create a simple function to launch TUI search
+    function Global:Search-ZigstoryHistory {
+        # Launch TUI directly
+        & $Global:ZigstoryBin search
+    }
+    
+    # Create short alias
+    Set-Alias -Name zs -Value Search-ZigstoryHistory -Scope Global
+    
+    Write-Host "Type 'zs' for interactive history search" -ForegroundColor Cyan
+}
+
