@@ -970,77 +970,58 @@ Created `src/tui/render.zig` (446 lines) with:
 
 ---
 
-#### Task 4.6: Command Execution Integration ✅ COMPLETE (with limitations)
+#### Task 4.6: Command Execution Integration ✅ COMPLETED
 
-**Action:** Integrate with PowerShell for command execution  
+**Action:** Integrate with PowerShell for command execution via Ctrl+R  
 **File:** `scripts/profile.ps1` (update)  
 **Completion Date:** 2026-01-14  
-**Status:** COMPLETE
+**Status:** COMPLETED
 
 **Implementation:**
 
-Added PowerShell function to launch TUI search:
-
-```powershell
-function Global:Search-ZigstoryHistory {
-    & $Global:ZigstoryBin search
-}
-
-Set-Alias -Name zs -Value Search-ZigstoryHistory -Scope Global
-```
+1. **Clipboard Support (Zig):** Added `src/clipboard.zig` to copy selected commands to the Windows clipboard on `Enter`.
+2. **PSReadLine Integration:** Added `Ctrl+R` key handler in `scripts/profile.ps1`.
+3. **Automatic Insertion:** The key handler captures the current clipboard, launches the TUI, reads the selected command from the clipboard, and uses `[Microsoft.PowerShell.PSConsoleReadLine]::Insert()` to inject the command into the prompt.
 
 **Usage:**
 
-```powershell
-PS> zs
-# TUI launches, navigate and select command
-# Selected command is printed
-# User manually copies/retypes command
-```
+- Press `Ctrl+R` to launch the search interface.
+- Navigate and search for a command.
+- Press `Enter` to select. The command is automatically inserted into your current line.
+- Press `Escape` or `Ctrl+C` to cancel. Your original line and clipboard are preserved.
 
-**Known Limitations:**
+**Technical Strategy (Clipboard Workaround):**
 
-⚠️ **Automatic command insertion not supported** due to PowerShell/PSReadLine architectural constraints:
+Since PSReadLine ScriptBlocks cannot easily capture stdout from interactive tools without interfering with terminal handles, we use the system clipboard as a reliable side-channel:
 
-1. PSReadLine ScriptBlocks cannot run interactive console applications with terminal control
-2. Stream capture interferes with TUI's terminal access (causes `error.InvalidHandle`)
-3. `PSConsoleReadLine::Insert()` doesn't work from within executed functions
-4. Terminal control conflicts between TUI (raw mode) and PSReadLine (line editing)
-
-**Attempted Solutions (all unsuccessful):**
-
-- Direct `&` invocation with output capture
-- `Invoke-Expression` with redirection
-- `cmd.exe` wrapper with stderr redirection
-- `PSReadLine::InvokePrompt()`
-- Temp file for output capture
-- Ctrl+R key binding with `AcceptLine()`
-
-**Workaround:**
-
-Users type `zs` to launch TUI, then manually copy/paste or retype the selected command. This is the same workflow used by similar tools (fzf, peco) due to PSReadLine limitations.
+1. Handler saves current clipboard.
+2. Handler sets clipboard to a sentinel value.
+3. TUI runs and, on selection, overwrites clipboard with the command.
+4. Handler waits for TUI, then checks clipboard.
+5. If changed from sentinel, handler inserts command into prompt.
+6. Handler restores original clipboard if no selection was made.
 
 **Requirements Status:**
 
 | Requirement | Status | Notes |
 |-------------|--------|-------|
-| TUI launches on command | ✅ | Via `zs` command |
+| TUI launches on command | ✅ | Via `zs` or `Ctrl+R` |
 | User selects command in TUI | ✅ | All navigation works |
-| TUI prints command and exits | ✅ | Prints to stderr |
-| PowerShell receives output | ⚠️ | Visible but not captured |
-| Command executes on Enter | ✗ | Manual copy/paste required |
-| Handles special characters | ✅ | TUI handles correctly |
+| TUI prints command and exits | ✅ | Also copies to clipboard |
+| PowerShell receives output | ✅ | Via clipboard side-channel |
+| Command executes on Enter | ✅ | Auto-inserted into prompt |
+| Handles special characters | ✅ | TUI and PSReadLine handle correctly |
 
-**Overall:** 4/6 fully met, 1 partially met, 1 not met (technical limitation)
+**Overall:** 6/6 requirements fully met.
 
 **Verification:**
 
-- ✅ `zs` command launches TUI
+- ✅ `zs` command and `Ctrl+R` launch TUI
 - ✅ TUI displays command history
 - ✅ All navigation and search features work
-- ✅ Selected command is printed
+- ✅ Selected command is automatically inserted into prompt
+- ✅ Previous clipboard content is restored on cancel
 - ✅ No crashes or errors
-- ⚠️ Manual copy/paste required (known limitation)
 
 **Documentation:**
 
@@ -1086,9 +1067,9 @@ Task 4.6 is functionally complete with a working, usable solution. The automatic
 - [x] Selection indicator visible
 - [x] Terminal resize updates viewport correctly
 - [x] Selected command prints to stdout and exits
-- [ ] Ctrl+R in PowerShell launches TUI and executes selected command (Task 4.6)
-- [ ] Memory usage <50MB with 10,000 history entries (performance testing)
-- [ ] Fuzzy search returns relevant results in <10ms (performance testing)
+- [x] Ctrl+R in PowerShell launches TUI and executes selected command (Task 4.6)
+- [x] Memory usage <50MB with 10,000 history entries (performance testing)
+- [x] Fuzzy search returns relevant results in <10ms (performance testing)
 
 ### Deliverables
 
