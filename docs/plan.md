@@ -1024,13 +1024,13 @@ Set-PSReadLineKeyHandler -Key Ctrl+r -ScriptBlock {
 - [x] Failed commands (`exit_code != 0`) displayed in red
 - [x] Duration only shows when > 1s
 - [x] Directory column right-aligned
-- [ ] All keyboard shortcuts work (arrows, Home/End, Page Up/Down, Ctrl+R)
+- [x] All keyboard shortcuts work (arrows, Home/End, Page Up/Down, Ctrl+R, Ctrl+U, etc.)
 - [x] Selection indicator visible
 - [x] Terminal resize updates viewport correctly
-- [ ] Selected command prints to stdout and exits
-- [ ] Ctrl+R in PowerShell launches TUI and executes selected command
-- [ ] Memory usage <50MB with 10,000 history entries
-- [ ] Fuzzy search returns relevant results in <10ms
+- [x] Selected command prints to stdout and exits
+- [ ] Ctrl+R in PowerShell launches TUI and executes selected command (Task 4.6)
+- [ ] Memory usage <50MB with 10,000 history entries (performance testing)
+- [ ] Fuzzy search returns relevant results in <10ms (performance testing)
 
 ### Deliverables
 
