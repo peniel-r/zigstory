@@ -341,7 +341,7 @@ pub fn renderHelpBar(win: vaxis.Window) void {
     var col: u16 = 1;
     const keybinds = [_]struct { key: []const u8, desc: []const u8 }{
         .{ .key = "↑/↓", .desc = " Nav  " },
-        .{ .key = "Enter", .desc = " Select  " },
+        .{ .key = "Enter", .desc = " Select&Copy  " },
         .{ .key = "Esc", .desc = " Exit  " },
         .{ .key = "PgUp/Dn", .desc = " Page  " },
         .{ .key = "Home/End", .desc = " Jump  " },

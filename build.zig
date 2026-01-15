@@ -37,6 +37,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
     exe.linkLibC();
+    if (target.result.os.tag == .windows) {
+        exe.linkSystemLibrary("user32");
+    }
 
     b.installArtifact(exe);
 

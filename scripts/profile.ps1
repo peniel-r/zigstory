@@ -75,7 +75,7 @@ function Global:Prompt {
     "PS $PWD> "
 }
 
-Write-Host "zigstory enabled (detached writes)" -ForegroundColor Green
+Write-Host "zigstory enabled!" -ForegroundColor Green
 
 # Load zigstory predictor assembly
 # Check both Release (dev) and publish (release) locations

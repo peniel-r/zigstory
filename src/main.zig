@@ -6,6 +6,7 @@ const add = @import("cli/add.zig");
 const import_history = @import("cli/import.zig");
 const list_history = @import("cli/list.zig");
 const tui = @import("tui/main.zig");
+const clipboard = @import("clipboard.zig");
 
 // Use libvaxis panic handler for proper terminal cleanup
 pub const panic = vaxis.panic_handler;
@@ -115,6 +116,10 @@ pub fn main() !void {
 
             if (result) |cmd| {
                 std.debug.print("{s}\n", .{cmd});
+                // Copy to clipboard for easy pasting
+                clipboard.copyToClipboard(allocator, cmd) catch |err| {
+                    std.debug.print("Warning: Failed to copy to clipboard: {}\n", .{err});
+                };
                 allocator.free(cmd);
             }
         },
