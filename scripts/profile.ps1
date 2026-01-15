@@ -128,6 +128,27 @@ if (Test-Path $Global:ZigstoryBin) {
     # Create short alias
     Set-Alias -Name zs -Value Search-ZigstoryHistory -Scope Global
     
-    Write-Host "Type 'zs' for interactive history search" -ForegroundColor Cyan
+    # Bind Ctrl+R to interactive search
+    if (Get-Module -ListAvailable PSReadLine) {
+        Import-Module PSReadLine
+        Set-PSReadLineKeyHandler -Key "Ctrl+r" -ScriptBlock {
+            $oldClip = Get-Clipboard -Raw
+            # Mark clipboard so we know if selection happened
+            Set-Clipboard -Value "__ZS_CANCEL__"
+            
+            # Start-Process -NoNewWindow is more reliable for TUIs from key handlers
+            $p = Start-Process -FilePath $Global:ZigstoryBin -ArgumentList "search" -Wait -NoNewWindow -PassThru
+            
+            $selected = Get-Clipboard -Raw
+            if ($selected -and $selected -ne "__ZS_CANCEL__") {
+                [Microsoft.PowerShell.PSConsoleReadLine]::DeleteLine()
+                [Microsoft.PowerShell.PSConsoleReadLine]::Insert($selected)
+            } elseif ($oldClip) {
+                Set-Clipboard -Value $oldClip
+            }
+        }
+    }
+
+    Write-Host "Type 'zs' or press 'Ctrl+R' for interactive history search" -ForegroundColor Cyan
 }
 
