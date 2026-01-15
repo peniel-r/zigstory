@@ -4,6 +4,7 @@ const sqlite = @import("sqlite");
 const scrolling = @import("scrolling.zig");
 const search_logic = @import("search.zig");
 const render = @import("render.zig");
+const navigation = @import("navigation.zig");
 
 /// Custom panic handler for proper terminal cleanup
 pub const panic = vaxis.panic_handler;
@@ -138,98 +139,82 @@ const TuiApp = struct {
     fn handleEvent(self: *TuiApp, event: Event) !void {
         switch (event) {
             .key_press => |key| {
-                if (key.matches('c', .{ .ctrl = true })) {
-                    // Ctrl+C: Exit without selection
-                    self.should_quit = true;
-                } else if (key.matches(vaxis.Key.escape, .{})) {
-                    // Escape: Exit search mode or app
-                    if (self.isSearching()) {
-                        self.search_state.query.clearRetainingCapacity();
-                        // Reset to browser mode
-                        self.scroll_state.total_count = try scrolling.getHistoryCount(self.db);
-                        self.scroll_state.scroll_position = 0;
-                        self.selected_index = 0;
-                        try self.refreshEntries();
-                    } else {
-                        self.should_quit = true;
-                    }
-                } else if (key.matches(vaxis.Key.enter, .{})) {
-                    // Enter: Exit with selection
-                    // Check bounds
-                    const results = self.search_state.results;
-                    // Determine actual index
-                    const idx = self.selected_index;
-                    // In Browser mode, selected_index is global, but results start at scroll_pos
-                    if (!self.isSearching()) {
-                        // results[0] corresponds to scroll_pos
-                        // selected_index is global.
-                        // local_index = selected_index - scroll_pos
-                        if (idx >= self.scroll_state.scroll_position) {
-                            const local_idx = idx - self.scroll_state.scroll_position;
-                            if (local_idx < results.len) {
-                                const selected = results[local_idx];
-                                self.selected_command = try self.allocator.dupe(u8, selected.cmd);
-                            }
-                        }
-                    } else {
-                        // Search mode: results[0] is index 0.
-                        // selected_index is local.
-                        if (idx < results.len) {
-                            const selected = results[idx];
-                            self.selected_command = try self.allocator.dupe(u8, selected.cmd);
-                        }
-                    }
-                    self.should_quit = true;
-                } else if (key.matches(vaxis.Key.up, .{}) or (!self.isSearching() and key.matches('k', .{}))) {
-                    // Up arrow: Move selection up
-                    if (self.selected_index > 0) {
-                        self.selected_index -= 1;
-                    }
-                    // Sync scroll
-                    if (self.selected_index < self.scroll_state.scroll_position) {
-                        self.scroll_state.scroll_position = self.selected_index;
-                        try self.refreshEntries();
-                    }
-                } else if (key.matches(vaxis.Key.down, .{}) or (!self.isSearching() and key.matches('j', .{}))) {
-                    // Down arrow: Move selection down
-                    if (self.selected_index + 1 < self.scroll_state.total_count) {
-                        self.selected_index += 1;
-                    }
-                    // Sync scroll
-                    const max_visible = self.scroll_state.scroll_position + self.scroll_state.visible_rows;
-                    if (self.selected_index >= max_visible) {
-                        self.scroll_state.scroll_position = self.selected_index - self.scroll_state.visible_rows + 1;
-                        try self.refreshEntries();
-                    }
-                } else if (key.matches(vaxis.Key.page_up, .{}) or key.matches('k', .{ .ctrl = true })) {
-                    // Page Up
-                    if (self.selected_index > self.scroll_state.visible_rows) {
-                        self.selected_index -= self.scroll_state.visible_rows;
-                        self.scroll_state.scroll_position -|= self.scroll_state.visible_rows;
-                    } else {
-                        self.selected_index = 0;
-                        self.scroll_state.scroll_position = 0;
-                    }
-                    try self.refreshEntries();
-                } else if (key.matches(vaxis.Key.page_down, .{}) or key.matches('j', .{ .ctrl = true })) {
-                    // Page Down
-                    const max_pos = self.scroll_state.total_count -| 1;
-                    self.selected_index = @min(self.selected_index + self.scroll_state.visible_rows, max_pos);
-                    if (self.selected_index >= self.scroll_state.scroll_position + self.scroll_state.visible_rows) {
-                        self.scroll_state.scroll_position = self.selected_index -| (self.scroll_state.visible_rows - 1);
-                    }
-                    try self.refreshEntries();
-                } else if (key.matches(vaxis.Key.backspace, .{})) {
-                    // Backspace for search
+                // Handle backspace for search first (before navigation)
+                if (key.matches(vaxis.Key.backspace, .{})) {
                     if (self.search_state.query.items.len > 0) {
                         _ = self.search_state.query.pop();
                         try self.performFuzzySearch();
                     }
-                } else if (key.text) |text| {
-                    // Text input for search
-                    // Ignore control chars?
+                    return;
+                }
+
+                // Handle text input for search
+                if (key.text) |text| {
                     try self.search_state.query.appendSlice(self.allocator, text);
                     try self.performFuzzySearch();
+                    return;
+                }
+
+                // Create navigation state
+                const old_scroll_pos = self.scroll_state.scroll_position;
+                var nav_state = navigation.NavigationState{
+                    .selected_index = self.selected_index,
+                    .scroll_position = self.scroll_state.scroll_position,
+                    .total_count = self.scroll_state.total_count,
+                    .visible_rows = self.scroll_state.visible_rows,
+                    .is_searching = self.isSearching(),
+                };
+
+                // Handle navigation keys
+                const action = nav_state.handleKey(key);
+
+                // Update state from navigation
+                self.selected_index = nav_state.selected_index;
+                self.scroll_state.scroll_position = nav_state.scroll_position;
+
+                // Handle navigation actions
+                switch (action) {
+                    .quit => {
+                        self.should_quit = true;
+                    },
+                    .select => {
+                        // Get selected command
+                        self.selected_command = try navigation.getSelectedCommand(
+                            self.allocator,
+                            self.search_state.results,
+                            self.selected_index,
+                            self.scroll_state.scroll_position,
+                            self.isSearching(),
+                        );
+                        self.should_quit = true;
+                    },
+                    .refresh => {
+                        // Refresh search results
+                        if (self.isSearching()) {
+                            try self.performFuzzySearch();
+                        } else {
+                            try self.refreshEntries();
+                        }
+                    },
+                    .clear_search => {
+                        // Clear search query (Ctrl+U)
+                        self.search_state.query.clearRetainingCapacity();
+                        try self.performFuzzySearch();
+                    },
+                    .exit_search_mode => {
+                        // Exit search mode and return to browser
+                        self.search_state.query.clearRetainingCapacity();
+                        self.scroll_state.total_count = try scrolling.getHistoryCount(self.db);
+                        self.scroll_state.scroll_position = 0;
+                        self.selected_index = 0;
+                        try self.refreshEntries();
+                    },
+                    .none => {
+                        // Check if we need to refresh due to scroll position change
+                        if (!self.isSearching() and nav_state.needsRefresh(old_scroll_pos)) {
+                            try self.refreshEntries();
+                        }
+                    },
                 }
             },
             .winsize => |ws| {
