@@ -21,12 +21,14 @@ All Phase 2 acceptance criteria have been successfully implemented and verified.
 
 **Status:** PASSING  
 **Evidence:**
+
 - Implementation: `src/cli/add.zig` (lines 1-112)
 - Test suite: `tests/add_test.zig` (6 test cases)
 - Manual verification: `zigstory add --cmd "test" --cwd "." --exit 0` executes successfully
 - Database insertion confirmed with proper parameter binding
 
 **Test Results:**
+
 ```
 Command added successfully
 ```
@@ -37,7 +39,8 @@ Command added successfully
 
 **Status:** IMPLEMENTED (Ready for integration)  
 **Evidence:**
-- Implementation: `scripts/profile.ps1` (lines 11-60)
+
+- Implementation: `scripts/zsprofile.ps1` (lines 11-60)
 - Prompt function hook captures:
   - Command text via `Get-History`
   - Execution time via timestamp tracking
@@ -45,11 +48,13 @@ Command added successfully
   - Current working directory via `$PWD`
 
 **Implementation Details:**
+
 - Async execution prevents prompt blocking (lines 39-45)
 - Silent error handling prevents shell disruption (lines 47-51)
 - Uses `Start-Process` with `-NoNewWindow -UseNewEnvironment`
 
 **Integration Steps:**
+
 ```powershell
 # Add to PowerShell profile ($PROFILE):
 . "f:\sandbox\zigstory\scripts\profile.ps1"
@@ -61,10 +66,13 @@ Command added successfully
 
 **Status:** IMPLEMENTED  
 **Evidence:**
-- Code: `scripts/profile.ps1` line 26
+
+- Code: `scripts/zsprofile.ps1` line 26
+
 ```powershell
 $exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
 ```
+
 - Database schema includes `exit_code INTEGER` column
 - Test verification shows proper handling of both zero and non-zero exit codes
 
@@ -74,7 +82,9 @@ $exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
 
 **Status:** IMPLEMENTED  
 **Evidence:**
-- Code: `scripts/profile.ps1` lines 19-23
+
+- Code: `scripts/zsprofile.ps1` lines 19-23
+
 ```powershell
 $duration = if ($Global:ZigstoryLastStartTime) {
     [int](($Global:ZigstoryStartTime - $Global:ZigstoryLastStartTime).TotalMilliseconds)
@@ -82,6 +92,7 @@ $duration = if ($Global:ZigstoryLastStartTime) {
     0
 }
 ```
+
 - Database schema includes `duration_ms INTEGER` column
 - Accurate millisecond precision tracking
 
@@ -91,6 +102,7 @@ $duration = if ($Global:ZigstoryLastStartTime) {
 
 **Status:** PASSING  
 **Evidence:**
+
 - Implementation: `src/cli/import.zig` (lines 1-190)
 - Features:
   - Locates PowerShell history file automatically
@@ -101,6 +113,7 @@ $duration = if ($Global:ZigstoryLastStartTime) {
 - All tests passing (30/30 total project tests)
 
 **Key Functions:**
+
 - `getHistoryPath()`: Finds PowerShell history file
 - `parseHistoryFile()`: Two-pass parser for efficiency
 - `isDuplicate()`: SQL-based duplicate detection
@@ -112,18 +125,21 @@ $duration = if ($Global:ZigstoryLastStartTime) {
 
 **Status:** EXCEEDS TARGETS  
 **Evidence:**
+
 - Target: Single insert <50ms, Batch (100) <1s
 - Actual Performance:
   - Single insert: **0ms average** (target: <50ms) ✓
   - Batch insert (100 commands): **3ms** (target: <1s) ✓
 
 **Test Output:**
+
 ```
 Batch insert (100 commands) took: 3ms
 Average single insert time: 0ms
 ```
 
 **Optimizations Implemented:**
+
 - Prepared statements (`src/db/write.zig` lines 44-68)
 - Transaction batching (lines 107-142)
 - Connection pooling with `ConnectionPool` struct
@@ -136,7 +152,9 @@ Average single insert time: 0ms
 
 **Status:** IMPLEMENTED  
 **Evidence:**
-- Code: `scripts/profile.ps1` lines 39-45
+
+- Code: `scripts/zsprofile.ps1` lines 39-45
+
 ```powershell
 Start-Process -FilePath $zigstoryBin `
     -ArgumentList $zigstoryArgs `
@@ -148,6 +166,7 @@ Start-Process -FilePath $zigstoryBin `
 ```
 
 **Design:**
+
 - Uses `Start-Process` for non-blocking execution
 - Redirects output streams to prevent console interference
 - Hidden window style ensures no visual disruption
@@ -159,13 +178,17 @@ Start-Process -FilePath $zigstoryBin `
 
 **Status:** PASSING  
 **Evidence:**
+
 - **Parameterized Queries:** All SQL uses bound parameters, never string concatenation
 - `src/cli/add.zig` lines 82-91:
+
 ```zig
 try stmt.bind(.{ params.cmd, params.cwd, exit_code, duration_ms, session_id, hostname });
 ```
+
 - `src/db/write.zig` lines 44-68: Prepared statements with parameter binding
 - **Test Verification:** Special characters and SQL injection patterns handled safely
+
 ```zig
 // Test case from tests/add_test.zig
 const sql_injection_cmd = "'; DROP TABLE history; --";
@@ -173,6 +196,7 @@ const sql_injection_cmd = "'; DROP TABLE history; --";
 ```
 
 **Security Measures:**
+
 - Zero string interpolation in SQL
 - All user inputs bound as parameters
 - SQLite's parameter binding prevents injection
@@ -186,7 +210,7 @@ const sql_injection_cmd = "'; DROP TABLE history; --";
 |-----------|------|-------|--------|-------|
 | Command Ingestion | `src/cli/add.zig` | 112 | ✅ Complete | 6 passing |
 | Write Optimization | `src/db/write.zig` | 182 | ✅ Complete | 16 passing |
-| PowerShell Hook | `scripts/profile.ps1` | 74 | ✅ Complete | Manual verified |
+| PowerShell Hook | `scripts/zsprofile.ps1` | 74 | ✅ Complete | Manual verified |
 | History Import | `src/cli/import.zig` | 190 | ✅ Complete | 10 passing |
 
 **Total Test Coverage:** 30/30 tests passing
@@ -207,6 +231,7 @@ const sql_injection_cmd = "'; DROP TABLE history; --";
 ## Integration Readiness
 
 ### ✅ Completed
+
 - [x] Zig binary compiled and functional
 - [x] Database initialization with WAL mode
 - [x] All CLI commands implemented
@@ -214,13 +239,16 @@ const sql_injection_cmd = "'; DROP TABLE history; --";
 - [x] Comprehensive test coverage
 
 ### 📋 User Integration Steps
+
 1. Build the project: `zig build`
 2. Add to PATH or copy `zig-out\bin\zigstory.exe` to desired location
 3. Source profile script in PowerShell profile:
+
    ```powershell
    # Add to $PROFILE:
    . "path\to\zigstory\scripts\profile.ps1"
    ```
+
 4. Restart PowerShell
 5. Verify: Commands are automatically tracked
 

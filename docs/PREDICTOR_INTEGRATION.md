@@ -108,7 +108,7 @@ The predictor reads from the zigstory database located at:
 %USERPROFILE%\.zigstory\history.db
 ```
 
-Ensure the database exists and has been populated by the zigstory hook (`scripts/profile.ps1`).
+Ensure the database exists and has been populated by the zigstory hook (`scripts/zsprofile.ps1`).
 
 ## Troubleshooting
 

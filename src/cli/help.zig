@@ -115,7 +115,7 @@ pub fn printHelp() void {
         \\  To enable automatic command tracking in PowerShell, add this to your
         \\  PowerShell profile ($PROFILE):
         \\
-        \\    . "C:\path\to\zigstory\scripts\profile.ps1"
+        \\    . "C:\path\to\zigstory\scripts\zsprofile.ps1"
         \\
         \\  This will:
         \\    * Automatically track every command you run

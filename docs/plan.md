@@ -250,7 +250,7 @@ Implement command history ingestion pipeline with metadata collection and PowerS
 #### Task 2.3: PowerShell Hook Integration ✅
 
 **Action:** Create PowerShell profile integration script  
-**File:** `scripts/profile.ps1`  
+**File:** `scripts/zsprofile.ps1`  
 **Status:** COMPLETED
 
 **Implementation:**
@@ -303,7 +303,7 @@ function Global:Prompt {
 Users add the following to their PowerShell profile (`$PROFILE`):
 
 ```powershell
-. "path\to\zigstory\scripts\profile.ps1"
+. "path\to\zigstory\scripts\zsprofile.ps1"
 ```
 
 ---
@@ -368,7 +368,7 @@ Users add the following to their PowerShell profile (`$PROFILE`):
 
 - ✅ `src/cli/add.zig` - Command ingestion logic
 - ✅ `src/db/write.zig` - Optimized write operations
-- ✅ `scripts/profile.ps1` - PowerShell integration script
+- ✅ `scripts/zsprofile.ps1` - PowerShell integration script
 - ✅ `src/cli/import.zig` - History import utility
 - ✅ `tests/add_test.zig` - Add command unit tests
 - ✅ `tests/write_test.zig` - Write performance unit tests
@@ -973,14 +973,14 @@ Created `src/tui/render.zig` (446 lines) with:
 #### Task 4.6: Command Execution Integration ✅ COMPLETED
 
 **Action:** Integrate with PowerShell for command execution via Ctrl+R  
-**File:** `scripts/profile.ps1` (update)  
+**File:** `scripts/zsprofile.ps1` (update)  
 **Completion Date:** 2026-01-14  
 **Status:** COMPLETED
 
 **Implementation:**
 
 1. **Clipboard Support (Zig):** Added `src/clipboard.zig` to copy selected commands to the Windows clipboard on `Enter`.
-2. **PSReadLine Integration:** Added `Ctrl+R` key handler in `scripts/profile.ps1`.
+2. **PSReadLine Integration:** Added `Ctrl+R` key handler in `scripts/zsprofile.ps1`.
 3. **Automatic Insertion:** The key handler captures the current clipboard, launches the TUI, reads the selected command from the clipboard, and uses `[Microsoft.PowerShell.PSConsoleReadLine]::Insert()` to inject the command into the prompt.
 
 **Usage:**
@@ -1080,7 +1080,7 @@ Task 4.6 is functionally complete with a working, usable solution. The automatic
 - `src/tui/navigation.zig` - Keyboard navigation
 - `src/tui/` - Complete TUI module
 - `zigstory.exe` (with search functionality)
-- `scripts/profile.ps1` (updated with Ctrl+R handler)
+- `scripts/zsprofile.ps1` (updated with Ctrl+R handler)
 - Performance benchmarks (scrolling, search)
 
 ---
@@ -1432,7 +1432,7 @@ fzf.stderr_behavior = .Inherit;
 - `src/cli/stats.zig` - Statistics dashboard
 - `src/cli/fzf.zig` - fzf integration module
 - Updated `src/cli/args.zig` - Add `fzf` subcommand
-- Updated `scripts/profile.ps1` - Add Ctrl+F handler for fzf
+- Updated `scripts/zsprofile.ps1` - Add Ctrl+F handler for fzf
 - Updated database schema (rank column, command_stats table)
 - Updated predictor with rank-based sorting
 - Database migration script (schema updates)
@@ -1701,7 +1701,7 @@ zigstory-v1.0.0/
 ├── INSTALLATION.md           # Installation instructions
 ├── LICENSE                   # License file
 └── scripts/
-    └── profile.ps1           # PowerShell integration script
+    └── zsprofile.ps1           # PowerShell integration script
 ```
 
 **Verification:** Package contains all necessary files

@@ -2,7 +2,7 @@
 
 ## Issue
 
-User reported that loading `scripts/profile.ps1` in PowerShell 7.6.0-preview.6 caused **several minutes of freezing** between command execution and prompt return.
+User reported that loading `scripts/zsprofile.ps1` in PowerShell 7.6.0-preview.6 caused **several minutes of freezing** between command execution and prompt return.
 
 ## Investigation Process
 
@@ -47,6 +47,7 @@ From `C:\temp\zigstory_debug.log`:
 ### Original Implementation Issues
 
 The batching approach in the original `profile.ps1` used:
+
 - `Register-ObjectEvent` for auto-flush timer
 - `Start-Job` for background flush
 - `Register-EngineEvent` for cleanup on exit
@@ -58,6 +59,7 @@ The batching approach in the original `profile.ps1` used:
 Created diagnostic profile (`scripts/profile_diagnostic.ps1`) that:
 
 ### ✅ What Works
+
 - **Instant prompt returns** (~13-20ms total)
 - **Fast Get-History** (~5-13μs after initial call)
 - **Async writes** using `cmd /c start /b` for detached processes
@@ -66,6 +68,7 @@ Created diagnostic profile (`scripts/profile_diagnostic.ps1`) that:
 - **Minimal blocking** - Only does queue operations and Process.Start
 
 ### ❌ Minor Bug (Not causing freeze)
+
 - The `clear` command was recorded when it should be filtered
 - This is a simple regex issue in skip patterns
 - **Not related to the freeze problem**
@@ -113,6 +116,7 @@ cmd /c start /b /min zigstory.exe $arg 2>$null | Out-Null
 ```
 
 **Why this works:**
+
 - `start /b` creates truly detached background process
 - `/min` starts minimized
 - `2>$null` redirects stderr to nul
@@ -155,7 +159,7 @@ function Global:Prompt {
 
 ## Files Modified
 
-- `scripts/profile.ps1` → Renamed to `profile_original.ps1` (old problematic version)
+- `scripts/zsprofile.ps1` → Renamed to `profile_original.ps1` (old problematic version)
 - `scripts/profile_diagnostic.ps1` → Renamed to `profile.ps1` (new working version)
 - `scripts/profile_backup.ps1` - Backup from first iteration
 - `scripts/profile_no_timer.ps1` - Intermediate version

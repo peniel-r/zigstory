@@ -8,9 +8,9 @@ Task 2.3 implements PowerShell profile integration to automatically track comman
 
 ## Implementation Details
 
-### 1. Created `scripts/profile.ps1`
+### 1. Created `scripts/zsprofile.ps1`
 
-**Location:** `scripts/profile.ps1`
+**Location:** `scripts/zsprofile.ps1`
 
 **Key Components:**
 
@@ -73,7 +73,7 @@ To install the PowerShell integration:
 . $PSScriptRoot\scripts\profile.ps1
 ```
 
-Or copy the contents of `scripts/profile.ps1` to your profile.
+Or copy the contents of `scripts/zsprofile.ps1` to your profile.
 
 ### 4. Testing
 
@@ -145,7 +145,7 @@ All fields (cmd, cwd, exit_code, duration_ms) are correctly stored.
 
 ### Created Files
 
-- `scripts/profile.ps1` - PowerShell integration script
+- `scripts/zsprofile.ps1` - PowerShell integration script
 - `tests/profile_test.ps1` - Integration test suite
 - `docs/TASK_2.3_SUMMARY.md` - This document
 
@@ -155,7 +155,7 @@ All fields (cmd, cwd, exit_code, duration_ms) are correctly stored.
 
 ## Verification Checklist
 
-- [x] `scripts/profile.ps1` created with Prompt function hook
+- [x] `scripts/zsprofile.ps1` created with Prompt function hook
 - [x] Execution time tracking implemented
 - [x] Error handling for write failures added
 - [x] Async writes don't block PowerShell prompt

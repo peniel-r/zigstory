@@ -2,7 +2,7 @@
 
 ## Problem
 
-When loading the PowerShell profile (`scripts/profile.ps1`), the prompt was experiencing significant delays after executing commands. This was caused by:
+When loading the PowerShell profile (`scripts/zsprofile.ps1`), the prompt was experiencing significant delays after executing commands. This was caused by:
 
 1. **Immediate writes on every command** - Each command triggered a full database write cycle
 2. **Binary startup overhead** - `zigstory.exe` cold starts on every command (~10-50ms)
@@ -20,12 +20,14 @@ Implemented two optimization strategies:
 Commands are now queued in memory and written to the database in batches instead of individually.
 
 **Key components:**
+
 - **Command Queue**: Global `$Global:ZigstoryQueue` list buffers commands in memory
 - **Auto-Flush Timer**: Background timer flushes queue every 5 seconds
 - **Bulk Import**: Uses JSON batch format and `zigstory import --file` for efficient writes
 - **Transaction Support**: Zig side uses transactions for bulk inserts
 
 **Performance improvement:**
+
 - Before: ~50ms per command (immediate write)
 - After: ~1ms per command (queue only), batch writes happen asynchronously
 
@@ -34,6 +36,7 @@ Commands are now queued in memory and written to the database in batches instead
 Trivial and non-useful commands are filtered out before they even reach the queue.
 
 **Filtered commands:**
+
 - Empty lines or whitespace-only input
 - Drive letters (e.g., `C:`, `D:`)
 - Navigation commands: `cd` (no args), `pwd`
@@ -41,6 +44,7 @@ Trivial and non-useful commands are filtered out before they even reach the queu
 - Exit command: `exit`
 
 **Benefits:**
+
 - Reduces database size by 30-50%
 - Eliminates unnecessary writes
 - Focuses history on meaningful commands
@@ -100,7 +104,7 @@ This is written to a temp file and processed via `zigstory import --file`.
 
 ### PowerShell Profile Settings
 
-Edit `scripts/profile.ps1` to customize behavior:
+Edit `scripts/zsprofile.ps1` to customize behavior:
 
 ```powershell
 # Batch flush interval (seconds)
@@ -111,6 +115,7 @@ $Global:ZigstoryMaxQueueSize = 100
 ```
 
 **Trade-offs:**
+
 - **Shorter interval** = More writes, less data loss on crash
 - **Longer interval** = Fewer writes, better performance
 - **Smaller max queue** = Frequent flushes, lower memory usage
@@ -118,7 +123,7 @@ $Global:ZigstoryMaxQueueSize = 100
 
 ### Skip Patterns
 
-Modify `$Global:ZigstorySkipPatterns` in `scripts/profile.ps1` to customize filtering:
+Modify `$Global:ZigstorySkipPatterns` in `scripts/zsprofile.ps1` to customize filtering:
 
 ```powershell
 $Global:ZigstorySkipPatterns = @(
@@ -138,7 +143,7 @@ Add your own patterns using PowerShell regex syntax.
 
 ## Technical Implementation
 
-### PowerShell Changes (`scripts/profile.ps1`)
+### PowerShell Changes (`scripts/zsprofile.ps1`)
 
 #### New Functions
 
@@ -167,12 +172,14 @@ Add your own patterns using PowerShell regex syntax.
 Added JSON batch import capability to avoid per-command overhead.
 
 **Files modified:**
+
 - `src/cli/args.zig`: Added `ImportParams` struct and `parseImport()` function
 - `src/main.zig`: Updated import command to handle `--file` option
 - `src/cli/import.zig`: Added `importFromFile()` function for JSON parsing
 - `src/cli/add.zig`: Made `generateSessionId()` and `getHostname()` public
 
 **Implementation details:**
+
 - Parses JSON array of command entries
 - Uses single transaction for all inserts
 - Generates one session ID and hostname per batch
@@ -225,16 +232,19 @@ $Global:ZigstoryQueue.Count
 If commands are not showing up in `zigstory list`:
 
 1. **Check if queue has items:**
+
    ```powershell
    $Global:ZigstoryQueue.Count
    ```
 
 2. **Check if timer is running:**
+
    ```powershell
    $Global:ZigstoryTimer.Enabled
    ```
 
 3. **Manual flush:**
+
    ```powershell
    ZigstoryFlushQueue
    ```
@@ -244,11 +254,13 @@ If commands are not showing up in `zigstory list`:
 If commands are lost on shell exit:
 
 1. Check event handler registration:
+
    ```powershell
    Get-EventSubscriber -SourceIdentifier PowerShell.Exiting
    ```
 
 2. Re-source the profile to register handlers:
+
    ```powershell
    . "F:\sandbox\zigstory\scripts\profile.ps1"
    ```
@@ -258,11 +270,13 @@ If commands are lost on shell exit:
 If auto-flush isn't working:
 
 1. Check timer state:
+
    ```powershell
    $Global:ZigstoryTimer | Select-Object Enabled, Interval, AutoReset
    ```
 
 2. Manually start timer:
+
    ```powershell
    $Global:ZigstoryTimer.Start()
    ```
@@ -291,6 +305,7 @@ If you're upgrading from the original `profile.ps1`:
 ### Backwards Compatibility
 
 The new `zigstory import --file` command is backwards compatible:
+
 - Original `zigstory import` (PowerShell history) still works
 - New `zigstory import --file <path>` (JSON batch) is additive
 - No breaking changes to existing CLI commands

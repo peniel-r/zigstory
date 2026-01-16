@@ -12,7 +12,8 @@ Write-Host ""
 Write-Host "[1/6] Checking zigstory binary..." -ForegroundColor Yellow
 if (Test-Path $zigstoryBin) {
     Write-Host "  ✓ zigstory binary found at: $zigstoryBin" -ForegroundColor Green
-} else {
+}
+else {
     Write-Host "  ✗ zigstory binary NOT found at: $zigstoryBin" -ForegroundColor Red
     exit 1
 }
@@ -21,17 +22,19 @@ if (Test-Path $zigstoryBin) {
 Write-Host "[2/6] Checking database file..." -ForegroundColor Yellow
 if (Test-Path $testDbPath) {
     Write-Host "  ✓ Database found at: $testDbPath" -ForegroundColor Green
-} else {
+}
+else {
     Write-Host "  ✗ Database NOT found at: $testDbPath" -ForegroundColor Red
     exit 1
 }
 
-# Test 3: Verify profile.ps1 exists
-Write-Host "[3/6] Checking profile.ps1 script..." -ForegroundColor Yellow
-$profileScript = ".\scripts\profile.ps1"
+# Test 3: Verify zsprofile.ps1 exists
+Write-Host "[3/6] Checking zsprofile.ps1 script..." -ForegroundColor Yellow
+$profileScript = ".\scripts\zsprofile.ps1"
 if (Test-Path $profileScript) {
     Write-Host "  ✓ Profile script found at: $profileScript" -ForegroundColor Green
-} else {
+}
+else {
     Write-Host "  ✗ Profile script NOT found at: $profileScript" -ForegroundColor Red
     exit 1
 }
@@ -46,7 +49,8 @@ $testDuration = 250
 $testResult = & $zigstoryBin add --cmd $testCmd --cwd $testCwd --exit $testExit --duration $testDuration 2>&1
 if ($LASTEXITCODE -eq 0) {
     Write-Host "  ✓ Add command executed successfully" -ForegroundColor Green
-} else {
+}
+else {
     Write-Host "  ✗ Add command failed: $testResult" -ForegroundColor Red
     exit 1
 }
@@ -59,11 +63,13 @@ if ($countResult -match "^\d+$") {
     $count = [int]$countResult
     if ($count -gt 0) {
         Write-Host "  ✓ Data stored successfully (found $count matching records)" -ForegroundColor Green
-    } else {
+    }
+    else {
         Write-Host "  ✗ Data NOT found in database" -ForegroundColor Red
         exit 1
     }
-} else {
+}
+else {
     Write-Host "  ✗ Query failed: $countResult" -ForegroundColor Red
     exit 1
 }
@@ -85,11 +91,13 @@ if ($result) {
         Write-Host "    - cwd: $storedCwd" -ForegroundColor Gray
         Write-Host "    - exit_code: $storedExit" -ForegroundColor Gray
         Write-Host "    - duration_ms: $storedDuration" -ForegroundColor Gray
-    } else {
+    }
+    else {
         Write-Host "  ✗ Invalid field count: $($fields.Count) (expected 4)" -ForegroundColor Red
         exit 1
     }
-} else {
+}
+else {
     Write-Host "  ✗ Query failed: $result" -ForegroundColor Red
     exit 1
 }
@@ -99,5 +107,5 @@ Write-Host "=== All tests passed! ===" -ForegroundColor Green
 Write-Host ""
 Write-Host "Profile.ps1 is ready to be integrated into your PowerShell profile." -ForegroundColor Cyan
 Write-Host "To install, add this line to your PowerShell profile:" -ForegroundColor Cyan
-Write-Host "  . $PSScriptRoot\scripts\profile.ps1" -ForegroundColor White
+Write-Host "  . $PSScriptRoot\scripts\zsprofile.ps1" -ForegroundColor White
 Write-Host ""

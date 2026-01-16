@@ -3,14 +3,15 @@
 Write-Host "`n=== Testing PowerShell Profile Batching ===`n" -ForegroundColor Cyan
 
 # Source the profile
-. "$PSScriptRoot\..\scripts\profile.ps1"
+. "$PSScriptRoot\..\scripts\zsprofile.ps1"
 
 # Test 1: Verify queue initialization
 Write-Host "Test 1: Verifying queue initialization..." -ForegroundColor Yellow
 if ($Global:ZigstoryQueue -ne $null) {
     Write-Host "  ✓ Queue initialized" -ForegroundColor Green
     Write-Host "  Queue type: $($Global:ZigstoryQueue.GetType().Name)" -ForegroundColor DarkGray
-} else {
+}
+else {
     Write-Host "  ✗ Queue not initialized" -ForegroundColor Red
 }
 
@@ -18,18 +19,18 @@ if ($Global:ZigstoryQueue -ne $null) {
 Write-Host "`nTest 2: Testing command filter function..." -ForegroundColor Yellow
 
 $testCommands = @(
-    @{cmd = "echo 'hello'"; should_record = $true}
-    @{cmd = ""; should_record = $false}
-    @{cmd = "   "; should_record = $false}
-    @{cmd = "C:"; should_record = $false}
-    @{cmd = "exit"; should_record = $false}
-    @{cmd = "git status"; should_record = $true}
-    @{cmd = "ls -la"; should_record = $true}
-    @{cmd = "cls"; should_record = $false}
-    @{cmd = "clear"; should_record = $false}
-    @{cmd = "cd"; should_record = $false}
-    @{cmd = "cd ."; should_record = $false}
-    @{cmd = "pwd"; should_record = $false}
+    @{cmd = "echo 'hello'"; should_record = $true }
+    @{cmd = ""; should_record = $false }
+    @{cmd = "   "; should_record = $false }
+    @{cmd = "C:"; should_record = $false }
+    @{cmd = "exit"; should_record = $false }
+    @{cmd = "git status"; should_record = $true }
+    @{cmd = "ls -la"; should_record = $true }
+    @{cmd = "cls"; should_record = $false }
+    @{cmd = "clear"; should_record = $false }
+    @{cmd = "cd"; should_record = $false }
+    @{cmd = "cd ."; should_record = $false }
+    @{cmd = "pwd"; should_record = $false }
 )
 
 $passCount = 0
@@ -40,7 +41,8 @@ foreach ($test in $testCommands) {
     if ($result -eq $test.should_record) {
         $passCount++
         Write-Host "  ✓ '$($test.cmd)' -> $($result)" -ForegroundColor Green
-    } else {
+    }
+    else {
         $failCount++
         Write-Host "  ✗ '$($test.cmd)' -> $($result) (expected: $($test.should_record))" -ForegroundColor Red
     }
@@ -64,7 +66,8 @@ Write-Host "  After adding 3 commands: $afterCount" -ForegroundColor DarkGray
 
 if ($afterCount -eq ($initialCount + 3)) {
     Write-Host "  ✓ Queue operations working correctly" -ForegroundColor Green
-} else {
+}
+else {
     Write-Host "  ✗ Queue operations failed" -ForegroundColor Red
 }
 
@@ -85,7 +88,8 @@ if ($afterFlush -eq 0 -and $beforeFlush -gt 0) {
     $listResult = & $Global:ZigstoryBin list 5 2>&1
     Write-Host "  Recent entries:" -ForegroundColor DarkGray
     Write-Host "$listResult" -ForegroundColor Gray
-} else {
+}
+else {
     Write-Host "  ✗ Flush failed" -ForegroundColor Red
 }
 
@@ -94,10 +98,12 @@ Write-Host "`nTest 5: Verifying auto-flush timer..." -ForegroundColor Yellow
 if ($Global:ZigstoryTimer -ne $null) {
     if ($Global:ZigstoryTimer.Enabled) {
         Write-Host "  ✓ Timer is running (interval: $($Global:ZigstoryTimer.Interval)ms = $([math]::Round($Global:ZigstoryTimer.Interval / 1000, 1))s)" -ForegroundColor Green
-    } else {
+    }
+    else {
         Write-Host "  ✗ Timer is not enabled" -ForegroundColor Red
     }
-} else {
+}
+else {
     Write-Host "  ✗ Timer not initialized" -ForegroundColor Red
 }
 

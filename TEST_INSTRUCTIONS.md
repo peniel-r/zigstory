@@ -30,6 +30,7 @@ notepad C:\temp\zigstory_debug.log
 ## What to Look For
 
 The log file will show:
+
 - When Prompt is called
 - Get-History execution time
 - Commands being detected
@@ -40,9 +41,10 @@ The log file will show:
 If YES → Problem is inside the Prompt function (Get-History or related)
 If NO → Problem is elsewhere (PSReadline, host, etc.)
 
-## Current Profile.ps1 Status
+## Current zsprofile.ps1 Status
 
 The current profile uses:
+
 - `cmd /c start /b` for detached writes (experimental)
 - No timer
 - No event registration
@@ -67,6 +69,7 @@ Then run commands and see if freeze still happens.
 ## What I Need From You
 
 Please:
+
 1. **Test the diagnostic profile** and share the log contents
 2. **Confirm if freeze still happens** with diagnostic profile
 3. **Share the log file content** from `C:\temp\zigstory_debug.log`

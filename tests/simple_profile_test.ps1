@@ -3,14 +3,15 @@
 Write-Host "=== Simple PowerShell Profile Test ===" -ForegroundColor Cyan
 
 # Source the profile
-. "$PSScriptRoot\..\scripts\profile.ps1"
+. "$PSScriptRoot\..\scripts\zsprofile.ps1"
 
 # Check if queue exists
 Write-Host "`nChecking queue..." -ForegroundColor Yellow
 if ($null -ne $Global:ZigstoryQueue) {
     Write-Host "Queue exists. Type: $($Global:ZigstoryQueue.GetType().Name)" -ForegroundColor Green
     Write-Host "Initial count: $($Global:ZigstoryQueue.Count)" -ForegroundColor DarkGray
-} else {
+}
+else {
     Write-Host "Queue NOT found!" -ForegroundColor Red
     exit 1
 }

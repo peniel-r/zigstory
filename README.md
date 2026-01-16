@@ -52,11 +52,11 @@
 
 The system uses a **Split-Brain Architecture** optimized for both write and read performance:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
-│                      PowerShell Session                      │
+│                      PowerShell Session                     │
 ├─────────────────────────────────────────────────────────────┤
-│                                                               │
+│                                                             │
 │  ┌──────────────────┐              ┌──────────────────┐     │
 │  │  Write Path      │              │  Read Path       │     │
 │  │  (Zig)           │              │  (.NET 8)        │     │
@@ -66,14 +66,14 @@ The system uses a **Split-Brain Architecture** optimized for both write and read
 │  │  • Batch insert  │              │  • <5ms queries  │     │
 │  └────────┬─────────┘              └────────┬─────────┘     │
 │           │                                 │               │
-│           └────────────┬────────────────────┘               │
-│                        │                                    │
-│                        ▼                                    │
-│              ┌──────────────────┐                           │
-│              │  SQLite (WAL)    │                           │
-│              │  ~/.zigstory/    │                           │
-│              │  history.db      │                           │
-│              └──────────────────┘                           │
+│           └────────────────┬────────────────┘               │
+│                            │                                │
+│                            ▼                                │
+│                  ┌──────────────────┐                       │
+│                  │  SQLite (WAL)    │                       │
+│                  │  ~/.zigstory/    │                       │
+│                  │  history.db      │                       │
+│                  └──────────────────┘                       │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -141,7 +141,7 @@ Add to your PowerShell profile (`notepad $PROFILE`):
 $ZigstoryPath = "C:\git\zigstory"
 
 # Source the integration script
-. "$ZigstoryPath\scripts\profile.ps1"
+. "$ZigstoryPath\scripts\zsprofile.ps1"
 ```
 
 This enables:

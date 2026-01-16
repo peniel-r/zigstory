@@ -21,7 +21,7 @@ Task 4.6 implements PowerShell integration for the zigstory TUI, allowing users 
 
 - Launches the zigstory TUI search interface
 - Accessible via short alias `zs`
-- Added to `scripts/profile.ps1`
+- Added to `scripts/zsprofile.ps1`
 
 **Code:**
 
@@ -142,7 +142,7 @@ From plan.md Task 4.6:
 
 ### Modified
 
-- `scripts/profile.ps1` (+8 lines)
+- `scripts/zsprofile.ps1` (+8 lines)
   - Added `Search-ZigstoryHistory` function
   - Added `zs` alias
   - Added profile load message
