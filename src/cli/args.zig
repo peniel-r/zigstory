@@ -6,6 +6,7 @@ pub const Action = union(enum) {
     import: ImportParams,
     stats: void,
     list: ListParams,
+    fzf: void,
     help: void,
 };
 
@@ -42,6 +43,8 @@ pub fn parse(allocator: std.mem.Allocator) !Action {
         return .stats;
     } else if (std.mem.eql(u8, command, "list")) {
         return parseList(allocator, &iter);
+    } else if (std.mem.eql(u8, command, "fzf")) {
+        return .fzf;
     } else if (std.mem.eql(u8, command, "-h") or std.mem.eql(u8, command, "--help")) {
         return .help;
     }

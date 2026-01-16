@@ -147,8 +147,26 @@ if (Test-Path $Global:ZigstoryBin) {
                 Set-Clipboard -Value $oldClip
             }
         }
+
+        # Bind Ctrl+F to fzf search
+        Set-PSReadLineKeyHandler -Key "Ctrl+f" -ScriptBlock {
+            $oldClip = Get-Clipboard -Raw
+            # Mark clipboard so we know if selection happened
+            Set-Clipboard -Value "__ZS_FZF_CANCEL__"
+            
+            # Start-Process -NoNewWindow is more reliable for TUIs from key handlers
+            $p = Start-Process -FilePath $Global:ZigstoryBin -ArgumentList "fzf" -Wait -NoNewWindow -PassThru
+            
+            $selected = Get-Clipboard -Raw
+            if ($selected -and $selected -ne "__ZS_FZF_CANCEL__") {
+                [Microsoft.PowerShell.PSConsoleReadLine]::DeleteLine()
+                [Microsoft.PowerShell.PSConsoleReadLine]::Insert($selected)
+            } elseif ($oldClip) {
+                Set-Clipboard -Value $oldClip
+            }
+        }
     }
 
-    Write-Host "Type 'zs' or press 'Ctrl+R' for interactive history search" -ForegroundColor Cyan
+    Write-Host "Type 'zs' or press 'Ctrl+R' for TUI search, 'Ctrl+F' for fzf search" -ForegroundColor Cyan
 }
 
