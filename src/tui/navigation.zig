@@ -199,3 +199,31 @@ pub fn getSelectedCommand(
 
     return null;
 }
+
+/// Get selected command entry from results
+pub fn getSelectedCommandEntry(
+    results: []const scrolling.HistoryEntry,
+    selected_index: usize,
+    scroll_position: usize,
+    is_searching: bool,
+) !?scrolling.HistoryEntry {
+    if (results.len == 0) return null;
+
+    if (is_searching) {
+        // In search mode, selected_index is direct index into results
+        if (selected_index < results.len) {
+            return results[selected_index]; // Return struct copy (slices still point to same memory)
+        }
+    } else {
+        // In browser mode, results[0] corresponds to scroll_position
+        // Calculate local index
+        if (selected_index >= scroll_position) {
+            const local_idx = selected_index - scroll_position;
+            if (local_idx < results.len) {
+                return results[local_idx];
+            }
+        }
+    }
+
+    return null;
+}
