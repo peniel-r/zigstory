@@ -28,6 +28,7 @@
 
 - **Built-in TUI** with real-time fuzzy search
 - **Virtual scrolling** handles massive histories efficiently
+- **Multi-select** commands for piped execution
 - **Vim-style keybindings** (Ctrl+K/J for page navigation)
 - **fzf integration** for users who prefer external tools
 - **Clipboard integration** - selected commands auto-copy
@@ -222,6 +223,7 @@ Launch the interactive TUI search interface.
 
 - Real-time fuzzy search as you type
 - Virtual scrolling for large histories (10,000+ commands)
+- Multi-select support (up to 5 commands)
 - Keyboard navigation (↑/↓, Page Up/Down, Ctrl+K/J)
 - Selected command copied to clipboard
 - Sub-5ms query performance
@@ -229,9 +231,10 @@ Launch the interactive TUI search interface.
 **Keybindings:**
 
 - `↑/↓` - Navigate up/down
+- `Space` - Toggle selection (multi-select)
 - `Page Up/Down` - Scroll by page
 - `Ctrl+K/J` - Page up/down (vim-style)
-- `Enter` - Select command and exit
+- `Enter` - Select command(s) and exit
 - `Ctrl+C/Esc` - Exit without selection
 - Type to filter results in real-time
 

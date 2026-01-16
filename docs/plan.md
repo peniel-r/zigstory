@@ -1085,6 +1085,40 @@ Task 4.6 is functionally complete with a working, usable solution. The automatic
 
 ---
 
+#### Task 4.7: Multi-Select Support ✅ COMPLETED
+
+**Action:** Implement multi-selection of commands for piped execution  
+**File:** `src/tui/main.zig`, `src/tui/render.zig`  
+**Completion Date:** 2026-01-15  
+**Status:** COMPLETED
+
+**Features:**
+
+1. **Selection Logic:**
+   - Toggle selection with `Space`
+   - Store selected commands in chronological order
+   - Deep copy selected entries (memory safety)
+   - Max 5 selections limit
+
+2. **Visual Feedback:**
+   - Visual indicator `[x]` for selected rows
+   - Status bar shows count (e.g., `| 2 selected`)
+   - Handle overlapping columns in render engine
+
+3. **Execution:**
+   - On `Enter`, concatenate selected commands with `|`
+   - Example: `git status | Select-String "modified"`
+
+**Verification:**
+
+- ✅ Space toggles selection state
+- ✅ Maximum limit of 5 enforced
+- ✅ Visual indicators render correctly
+- ✅ Chronological order preserved in output
+- ✅ Piped command string generated correctly
+
+---
+
 ## Phase 5: Advanced Features
 
 ### Objective
