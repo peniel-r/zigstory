@@ -1412,10 +1412,10 @@ fzf.stderr_behavior = .Inherit;
 - [ ] Ctrl+F toggles directory filter in TUI
 - [ ] Status line shows current filter mode
 - [ ] Current directory mode filters by `cwd` column
-- [ ] `zigstory stats` command displays all statistics
-- [ ] Top 10 commands shown with count and last used
-- [ ] ASCII bar charts render for time distribution
-- [ ] Success rate calculated and displayed
+- [x] `zigstory stats` command displays all statistics
+- [x] Top 10 commands shown with count and last used
+- [x] ASCII bar charts render for time distribution
+- [x] Success rate calculated and displayed
 - [ ] Predictor updated to use `ORDER BY rank DESC, timestamp DESC`
 - [ ] `zigstory fzf` command exists and launches fzf with command history
 - [ ] Commands are deduplicated (most recent shown) in fzf

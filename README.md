@@ -274,6 +274,21 @@ zigstory list
 zigstory list 20
 ```
 
+#### `zigstory stats`
+
+Display usage statistics and insights.
+
+```powershell
+zigstory stats
+```
+
+**Output:**
+
+- **Overview**: Total commands, unique count, history span
+- **Top Commands**: Most frequently used commands
+- **Activity**: Hourly usage distribution (ASCII chart)
+- **Directories**: Top working directories
+
 #### `zigstory help`
 
 Display comprehensive help documentation.
@@ -305,7 +320,7 @@ See [docs/plan.md](docs/plan.md) for the detailed development roadmap.
 - [x] **Phase 2**: Write Path & Shell Integration ✅
 - [x] **Phase 3**: High-Performance Predictor ✅
 - [x] **Phase 4**: TUI Search Implementation ✅
-- [ ] **Phase 5**: Frecency Ranking & Advanced Stats (Planned)
+- [/] **Phase 5**: Frecency Ranking & Advanced Stats (In Progress)
 
 ### Current Status
 
