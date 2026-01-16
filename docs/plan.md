@@ -137,91 +137,6 @@ pub fn initDb(path: []const u8) !sqlite.Db {
 
 ---
 
-#### Task 5.5: fzf Integration
-
-**Action:** Implement standalone fzf integration for fuzzy searching  
-**File:** `src/cli/fzf.zig`  
-**Key Binding:** Ctrl+F (PowerShell only, NOT in TUI)
-
-**Implementation:**
-
-1. **Command Output:**
-   - Query all commands from database
-   - Deduplicate commands (show most recent occurrence)
-   - Output one command per line to stdout
-   - Format: Plain text (no metadata)
-
-2. **Subprocess Management:**
-   - Detect if fzf is installed (check PATH)
-   - Spawn fzf as subprocess
-   - Pipe command history to fzf's stdin
-   - Capture selected command from fzf's stdout
-   - Handle fzf exit codes (0 = selected, 1 = cancelled, 130 = Ctrl+C)
-
-3. **Graceful Fallback:**
-   - If fzf not found: Print error message and exit with code 2
-   - Error message: "fzf not found. Install from https://github.com/junegunn/fzf"
-   - User can still use `zigstory search` as alternative
-
-**SQL Query:**
-
-```sql
-SELECT DISTINCT cmd
-FROM history
-ORDER BY timestamp DESC;
-```
-
-**Command Usage:**
-
-```powershell
-# Interactive fuzzy search
-zigstory fzf
-
-# In PowerShell profile (Ctrl+F handler)
-Set-PSReadLineKeyHandler -Key Ctrl+F -ScriptBlock {
-    $selection = zigstory fzf
-    if ($selection) {
-        [Microsoft.PowerShell.PSConsoleReadLine]::Insert($selection)
-    }
-}
-```
-
-**Technical Strategy:**
-
-Use Zig's `std.process.Child` to spawn fzf:
-
-```zig
-var fzf = std.process.Child.init(
-    &[_][]const u8{"fzf"},
-    allocator
-);
-fzf.stdin_behavior = .Pipe;
-fzf.stdout_behavior = .Pipe;
-fzf.stderr_behavior = .Inherit;
-
-// Write commands to fzf's stdin
-// Read selection from fzf's stdout
-```
-
-**Verification:**
-
-- ✅ `zigstory fzf` launches fzf with command history
-- ✅ Commands are deduplicated (most recent shown)
-- ✅ Selected command prints to stdout
-- ✅ Ctrl+F in PowerShell launches fzf (not TUI)
-- ✅ Graceful error when fzf not installed
-- ✅ Does not interfere with TUI's Ctrl+F (directory filter)
-- ✅ fzf features (preview, multi-select) work via flags (future)
-
-**Future Enhancements:**
-
-- `--query` flag: Pre-fill search query
-- `--limit` flag: Limit number of commands passed to fzf
-- `--cwd` flag: Filter by current directory
-- Pass-through flags: Allow passing fzf flags directly
-
----
-
 ### Dependencies
 
 None (foundation phase)
@@ -1393,6 +1308,91 @@ ORDER BY hour;
 - All statistics display correctly
 - ASCII charts render properly
 - Data is accurate
+
+---
+
+#### Task 5.5: fzf Integration
+
+**Action:** Implement standalone fzf integration for fuzzy searching  
+**File:** `src/cli/fzf.zig`  
+**Key Binding:** Ctrl+F (PowerShell only, NOT in TUI)
+
+**Implementation:**
+
+1. **Command Output:**
+   - Query all commands from database
+   - Deduplicate commands (show most recent occurrence)
+   - Output one command per line to stdout
+   - Format: Plain text (no metadata)
+
+2. **Subprocess Management:**
+   - Detect if fzf is installed (check PATH)
+   - Spawn fzf as subprocess
+   - Pipe command history to fzf's stdin
+   - Capture selected command from fzf's stdout
+   - Handle fzf exit codes (0 = selected, 1 = cancelled, 130 = Ctrl+C)
+
+3. **Graceful Fallback:**
+   - If fzf not found: Print error message and exit with code 2
+   - Error message: "fzf not found. Install from <https://github.com/junegunn/fzf>"
+   - User can still use `zigstory search` as alternative
+
+**SQL Query:**
+
+```sql
+SELECT DISTINCT cmd
+FROM history
+ORDER BY timestamp DESC;
+```
+
+**Command Usage:**
+
+```powershell
+# Interactive fuzzy search
+zigstory fzf
+
+# In PowerShell profile (Ctrl+F handler)
+Set-PSReadLineKeyHandler -Key Ctrl+F -ScriptBlock {
+    $selection = zigstory fzf
+    if ($selection) {
+        [Microsoft.PowerShell.PSConsoleReadLine]::Insert($selection)
+    }
+}
+```
+
+**Technical Strategy:**
+
+Use Zig's `std.process.Child` to spawn fzf:
+
+```zig
+var fzf = std.process.Child.init(
+    &[_][]const u8{"fzf"},
+    allocator
+);
+fzf.stdin_behavior = .Pipe;
+fzf.stdout_behavior = .Pipe;
+fzf.stderr_behavior = .Inherit;
+
+// Write commands to fzf's stdin
+// Read selection from fzf's stdout
+```
+
+**Verification:**
+
+- ✅ `zigstory fzf` launches fzf with command history
+- ✅ Commands are deduplicated (most recent shown)
+- ✅ Selected command prints to stdout
+- ✅ Ctrl+F in PowerShell launches fzf (not TUI)
+- ✅ Graceful error when fzf not installed
+- ✅ Does not interfere with TUI's Ctrl+F (directory filter)
+- ✅ fzf features (preview, multi-select) work via flags (future)
+
+**Future Enhancements:**
+
+- `--query` flag: Pre-fill search query
+- `--limit` flag: Limit number of commands passed to fzf
+- `--cwd` flag: Filter by current directory
+- Pass-through flags: Allow passing fzf flags directly
 
 ---
 
