@@ -1,4 +1,6 @@
+# ─────────────────────────────────────────────────────────────────────────────
 # zigstory PowerShell Profile Integration
+# ─────────────────────────────────────────────────────────────────────────────
 
 # Resolve paths relative to this script
 $RepoRoot = Resolve-Path "$PSScriptRoot\.."
