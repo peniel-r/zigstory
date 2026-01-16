@@ -8,6 +8,7 @@ const list_history = @import("cli/list.zig");
 const fzf_search = @import("cli/fzf.zig");
 const tui = @import("tui/main.zig");
 const clipboard = @import("clipboard.zig");
+const help = @import("cli/help.zig");
 
 // Use libvaxis panic handler for proper terminal cleanup
 pub const panic = vaxis.panic_handler;
@@ -278,7 +279,7 @@ pub fn main() !void {
             }
         },
         .help => {
-            std.debug.print("Usage: zigstory [add|search|import|list|fzf] [options]\n", .{});
+            help.printHelp();
         },
     }
 }
