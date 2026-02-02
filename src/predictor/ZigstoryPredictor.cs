@@ -23,11 +23,12 @@ public class ZigstoryPredictor : ICommandPredictor
     private readonly LruCache<string, List<string>> _resultCache = new(100);
     
     // Pre-compiled query string (const for zero allocation)
+    // Use rank-based sorting for frecency ranking
     private const string PredictionQuery = @"
         SELECT DISTINCT cmd 
         FROM history 
         WHERE cmd LIKE @input || '%' 
-        ORDER BY timestamp DESC 
+        ORDER BY rank DESC, timestamp DESC 
         LIMIT 5";
     
     // Reusable list to minimize allocations (thread-local would be better for true thread safety)
@@ -36,7 +37,7 @@ public class ZigstoryPredictor : ICommandPredictor
     
     public Guid Id => _guid;
     public string Name => "Zigstory";
-    public string Description => "Zig-based shell history predictor with sub-5ms query performance";
+    public string Description => "Zig-based shell history predictor with frecency ranking and sub-5ms query performance";
 
     public ZigstoryPredictor()
     {

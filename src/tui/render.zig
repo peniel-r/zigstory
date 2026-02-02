@@ -296,6 +296,7 @@ pub fn renderStatusBar(
     selected_index: usize,
     result_count: usize,
     selections_count: usize,
+    filter_mode: ?[]const u8,
 ) !void {
     const bar_style = vaxis.Style{
         .fg = colors.fg_dimmed,
@@ -303,7 +304,7 @@ pub fn renderStatusBar(
     };
     fillRowBackground(win, 1, bar_style);
 
-    var status_buf: [256]u8 = undefined;
+    var status_buf: [512]u8 = undefined;
     var status_text: []const u8 = "";
 
     const search_style = vaxis.Style{
@@ -313,9 +314,20 @@ pub fn renderStatusBar(
     };
 
     if (is_searching) {
-        status_text = std.fmt.bufPrint(&status_buf, " Search: {s}| ({d} results) {s}", .{ query, result_count, if (selections_count > 0) std.fmt.bufPrint(status_buf[128..], "| {d} selected", .{selections_count}) catch "" else "" }) catch " Error ";
+        status_text = std.fmt.bufPrint(&status_buf, " Search: {s}| ({d} results) {s} | [FILTER: {s}]", .{
+            query,
+            result_count,
+            if (selections_count > 0) std.fmt.bufPrint(status_buf[256..], "| {d} selected", .{selections_count}) catch "" else "",
+            filter_mode orelse "Global",
+        }) catch " Error ";
     } else {
-        status_text = std.fmt.bufPrint(&status_buf, " {d} commands | {d}/{d} | Type to search {s}", .{ total_count, if (total_count > 0) selected_index + 1 else 0, total_count, if (selections_count > 0) std.fmt.bufPrint(status_buf[128..], "| {d} selected", .{selections_count}) catch "" else "" }) catch " Error ";
+        status_text = std.fmt.bufPrint(&status_buf, " {d} commands | {d}/{d} | Type to search {s} | [FILTER: {s}]", .{
+            total_count,
+            if (total_count > 0) selected_index + 1 else 0,
+            total_count,
+            if (selections_count > 0) std.fmt.bufPrint(status_buf[256..], "| {d} selected", .{selections_count}) catch "" else "",
+            filter_mode orelse "Global",
+        }) catch " Error ";
     }
 
     // Duplicate status_text to ensure it survives the frame
@@ -349,6 +361,7 @@ pub fn renderHelpBar(win: vaxis.Window) void {
         .{ .key = "PgUp/Dn", .desc = " Page  " },
         .{ .key = "Home/End", .desc = " Jump  " },
         .{ .key = "Ctrl+U", .desc = " Clear  " },
+        .{ .key = "Ctrl+F", .desc = " Toggle Filter  " },
         .{ .key = "", .desc = "Type to search" },
     };
 

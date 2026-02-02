@@ -5,6 +5,7 @@ const scrolling = @import("scrolling.zig");
 const search_logic = @import("search.zig");
 const render = @import("render.zig");
 const navigation = @import("navigation.zig");
+const directory_filter = @import("directory_filter.zig");
 
 /// Custom panic handler for proper terminal cleanup
 pub const panic = vaxis.panic_handler;
@@ -45,8 +46,8 @@ const TuiApp = struct {
 
     selected_index: usize = 0,
 
-    /// Initialize the TUI application
-    pub fn init(allocator: std.mem.Allocator, db: *sqlite.Db) !TuiApp {
+    /// Initialize TUI application
+    pub fn init(allocator: std.mem.Allocator, db: *sqlite.Db, current_dir: ?[]const u8) !TuiApp {
         var buffer: [1024]u8 = undefined;
         var tty = try vaxis.Tty.init(&buffer);
         errdefer tty.deinit();
@@ -75,6 +76,8 @@ const TuiApp = struct {
         };
 
         var search_state = search_logic.SearchState.init(allocator);
+        // Set current directory for filtering
+        search_state.filter_state = directory_filter.DirectoryFilterState.init(current_dir);
 
         // Fetch initial page of entries (Browsing mode)
         search_state.results = try scrolling.fetchHistoryPage(
@@ -191,6 +194,18 @@ const TuiApp = struct {
                     if (self.search_state.query.items.len > 0) {
                         _ = self.search_state.query.pop();
                         try self.performFuzzySearch();
+                    }
+                    return;
+                }
+
+                // Handle Ctrl+F to toggle directory filter
+                if (key.matches('f', .{ .ctrl = true })) {
+                    self.search_state.filter_state.toggleMode();
+                    // Refresh results after toggling filter
+                    if (self.isSearching()) {
+                        try self.performFuzzySearch();
+                    } else {
+                        try self.refreshEntries();
                     }
                     return;
                 }
@@ -318,6 +333,7 @@ const TuiApp = struct {
 
         // Render status/search bar (row 1)
         const search_query = self.search_state.query.items;
+        const filter_mode_str = self.search_state.filter_state.mode.toString();
         try render.renderStatusBar(
             win,
             allocator,
@@ -327,6 +343,7 @@ const TuiApp = struct {
             self.selected_index,
             self.search_state.results.len,
             self.selections.items.len,
+            filter_mode_str,
         );
 
         // Draw entries starting at row 2
@@ -407,8 +424,8 @@ const TuiApp = struct {
 };
 
 /// Entry point for TUI search interface
-pub fn search(allocator: std.mem.Allocator, db: *sqlite.Db) !?[]const u8 {
-    var app = try TuiApp.init(allocator, db);
+pub fn search(allocator: std.mem.Allocator, db: *sqlite.Db, current_dir: ?[]const u8) !?[]const u8 {
+    var app = try TuiApp.init(allocator, db, current_dir);
     defer app.deinit();
     try app.run();
 

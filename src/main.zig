@@ -113,8 +113,15 @@ pub fn main() !void {
             };
             defer db.deinit();
 
+            // Get current working directory for filter
+            const cwd = std.process.getCwdAlloc(allocator) catch |err| {
+                std.debug.print("Error getting current directory: {}\n", .{err});
+                std.process.exit(1);
+            };
+            defer allocator.free(cwd);
+
             // Launch TUI search interface
-            const result = tui.search(allocator, &db) catch |err| {
+            const result = tui.search(allocator, &db, cwd) catch |err| {
                 std.debug.print("Error launching TUI: {}\n", .{err});
                 std.process.exit(1);
             };
