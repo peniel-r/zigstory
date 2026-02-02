@@ -85,9 +85,12 @@ function Global:Prompt {
         }
     }
 
-    # Return prompt string - don't invoke old prompt to avoid recursion
-    # Just return a simple prompt
-    "PS $PWD> "
+    # Invoke the old prompt if it exists, otherwise return simple prompt
+    if ($null -ne $Global:ZigstoryOldPromptScriptBlock) {
+        & $Global:ZigstoryOldPromptScriptBlock
+    } else {
+        "PS $PWD> "
+    }
 }
 
 Write-Host "zigstory enabled!" -ForegroundColor Green
