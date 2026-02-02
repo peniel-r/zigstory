@@ -19,7 +19,7 @@ Write-Host ""
 # Step 1: Determine PowerShell 7 profile locations
 # ----------------------------------------------------------------------------
 
-Write-Host "[Step 1/7] Locating PowerShell 7 profile directories..." -ForegroundColor Yellow
+Write-Host "[Step 1/8] Locating PowerShell 7 profile directories..." -ForegroundColor Yellow
 
 # PowerShell 7 (pwsh) uses different paths than Windows PowerShell (powershell)
 # The profile for PowerShell 7 is typically:
@@ -58,7 +58,7 @@ Write-Host ""
 # Step 2: Copy zigstory executable to APPDATA
 # ----------------------------------------------------------------------------
 
-Write-Host "[Step 2/7] Copying zigstory executable to APPDATA..." -ForegroundColor Yellow
+Write-Host "[Step 2/8] Copying zigstory executable to APPDATA..." -ForegroundColor Yellow
 
 # APPDATA installation directory
 $AppDataDir = Join-Path $env:APPDATA "zigstory"
@@ -105,7 +105,7 @@ Write-Host ""
 # Step 3: Add zigstory to PATH environment variable
 # ----------------------------------------------------------------------------
 
-Write-Host "[Step 3/7] Checking PATH environment variable..." -ForegroundColor Yellow
+Write-Host "[Step 3/8] Checking PATH environment variable..." -ForegroundColor Yellow
 
 # Get current PATH for both current process and user
 $CurrentPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -157,7 +157,7 @@ Write-Host ""
 # Step 4: Copy zsprofile.ps1 to profile directory
 # ----------------------------------------------------------------------------
 
-Write-Host "[Step 4/7] Copying zsprofile.ps1 to profile directory..." -ForegroundColor Yellow
+Write-Host "[Step 4/8] Copying zsprofile.ps1 to profile directory..." -ForegroundColor Yellow
 
 $ZsProfileSource = Join-Path $ScriptRoot "zsprofile.ps1"
 $ZsProfileDest = Join-Path $ProfileDir "zsprofile.ps1"
@@ -177,7 +177,7 @@ Write-Host ""
 # Step 5: Copy predictor DLL to Modules directory
 # ----------------------------------------------------------------------------
 
-Write-Host "[Step 5/7] Installing predictor module..." -ForegroundColor Yellow
+Write-Host "[Step 5/8] Installing predictor module..." -ForegroundColor Yellow
 
 # PowerShell 7 modules directory
 $ModulesDir = Join-Path $env:USERPROFILE "Documents\PowerShell\Modules"
@@ -272,10 +272,10 @@ Write-Host ""
 # ----------------------------------------------------------------------------
 
 if ($SkipProfile) {
-    Write-Host "[Step 6/7] Skipping profile modification (--SkipProfile specified)" -ForegroundColor Yellow
+    Write-Host "[Step 6/8] Skipping profile modification (--SkipProfile specified)" -ForegroundColor Yellow
     Write-Host ""
 } else {
-    Write-Host "[Step 6/7] Adding zsprofile to PowerShell profile..." -ForegroundColor Yellow
+    Write-Host "[Step 6/8] Adding zsprofile to PowerShell profile..." -ForegroundColor Yellow
 
     $ImportLine = ". `"$ZsProfileDest`""
     $ProfileExists = Test-Path $ProfilePath
@@ -318,7 +318,7 @@ if ($SkipProfile) {
 # Step 7: Register predictor module (first-time setup)
 # ----------------------------------------------------------------------------
 
-Write-Host "[Step 7/7] Registering predictor module..." -ForegroundColor Yellow
+Write-Host "[Step 7/8] Registering predictor module..." -ForegroundColor Yellow
 
 # Check if the predictor DLL was copied successfully
 $PredictorDll = Join-Path $PredictorModuleDir "zigstoryPredictor.dll"
@@ -385,6 +385,50 @@ if (-not (Test-Path $PredictorDll)) {
             }
             Write-Host "    This is expected if not running in PowerShell 7+ or if the DLL is locked." -ForegroundColor Gray
         }
+    }
+}
+
+Write-Host ""
+
+# ----------------------------------------------------------------------------
+# Step 8: Import existing history or create database
+# ----------------------------------------------------------------------------
+
+Write-Host "[Step 8/8] Importing existing history or creating database..." -ForegroundColor Yellow
+
+# Check if PowerShell history file exists
+$HistoryFile = "$env:APPDATA\Microsoft\Windows\PowerShell\PSReadline\ConsoleHost_history.txt"
+$HistoryFileExists = Test-Path $HistoryFile
+
+if ($HistoryFileExists) {
+    Write-Host "  Found PowerShell history file" -ForegroundColor Gray
+    Write-Host "  Importing existing commands..." -ForegroundColor Yellow
+
+    # Run zigstory import
+    $ImportResult = & "$AppDataExe" import 2>&1
+    $ExitCode = $LASTEXITCODE
+
+    if ($ExitCode -eq 0) {
+        Write-Host "  Successfully imported existing history" -ForegroundColor Green
+    } else {
+        Write-Host "  ! Import encountered issues (Exit code: $ExitCode)" -ForegroundColor Yellow
+        Write-Host "    This is normal if you haven't used PowerShell much yet" -ForegroundColor Gray
+        Write-Host "    Database has been initialized and is ready to use" -ForegroundColor Gray
+    }
+} else {
+    Write-Host "  No PowerShell history file found" -ForegroundColor Gray
+    Write-Host "  Creating new database..." -ForegroundColor Yellow
+
+    # Run zigstory list to create database (any command will initialize it)
+    $InitResult = & "$AppDataExe" list 2>&1
+    $ExitCode = $LASTEXITCODE
+
+    if ($ExitCode -eq 0) {
+        Write-Host "  Database created successfully" -ForegroundColor Green
+        Write-Host "  Ready to start recording your commands!" -ForegroundColor Green
+    } else {
+        Write-Host "  ! Database initialization had issues (Exit code: $ExitCode)" -ForegroundColor Yellow
+        Write-Host "    You can initialize manually by running: zigstory list" -ForegroundColor Gray
     }
 }
 
