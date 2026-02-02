@@ -21,17 +21,18 @@
 
 - **Ghost text suggestions** as you type (powered by custom C# `ICommandPredictor`)
 - **LRU caching** for instant cache hits (<1ms)
-- **Context-aware ranking** based on recency and frequency
+- **Advanced frecency ranking** based on frequency and recency scoring
 - **Connection pooling** for optimal database performance
 
 ### 🔍 **Interactive Search**
 
-- **Built-in TUI** with real-time fuzzy search
+- **Built-in TUI** with real-time fuzzy search (uses LIKE queries for reliability)
 - **Virtual scrolling** handles massive histories efficiently
-- **Multi-select** commands for piped execution
-- **Vim-style keybindings** (Ctrl+K/J for page navigation)
+- **Multi-select** commands for piped execution (up to 5 commands)
+- **Vim-style keybindings** (j/k for navigation, Ctrl+K/J for page navigation)
 - **fzf integration** for users who prefer external tools
 - **Clipboard integration** - selected commands auto-copy
+- **Search highlighting** - matched terms highlighted in results
 
 ### 📊 **Rich Context Tracking**
 
@@ -47,7 +48,7 @@
 - **Automatic duplicate detection** during imports
 - **SQL injection protection** with parameterized queries
 - **Graceful error handling** prevents shell disruption
-- **Full-text search (FTS5)** for advanced queries
+- **FTS5 support** maintained for future enhancements (current TUI uses LIKE queries)
 
 ## 🏗️ Architecture
 
@@ -152,32 +153,20 @@ This enables:
 - ✅ Working directory context
 - ✅ Async writes (non-blocking prompt)
 
-### 2. Enable Ghost Text Predictions
+### 2. Automatic Configuration
 
-Add to your PowerShell profile:
+The `zsprofile.ps1` script automatically configures:
 
-```powershell
-# Load the predictor module
-Import-Module "C:\git\zigstory\src\predictor\bin\Release\net8.0\zigstoryPredictor.dll"
+- ✅ Predictor module loading
+- ✅ Ghost text predictions enabled with `Set-PSReadLineOption -PredictionSource Plugin`
+- ✅ Prediction view style set to `ListView`
+- ✅ Ctrl+R keybinding for TUI search
+- ✅ Ctrl+F keybinding for fzf search
 
-# Enable predictions from both history and plugins
-Set-PSReadLineOption -PredictionSource HistoryAndPlugin
-
-# Optional: Configure prediction view style
-Set-PSReadLineOption -PredictionViewStyle ListView  # or InlineView
-```
-
-### 3. Optional: Ctrl+R Keybinding
-
-Add to your PowerShell profile for Ctrl+R TUI search:
+**Note:** If you prefer inline view instead of list view, add this to your profile after sourcing `zsprofile.ps1`:
 
 ```powershell
-Set-PSReadLineKeyHandler -Key Ctrl+r -ScriptBlock {
-    $cmd = & "C:\git\zigstory\zig-out\bin\zigstory.exe" search
-    if ($cmd) {
-        [Microsoft.PowerShell.PSConsoleReadLine]::Insert($cmd)
-    }
-}
+Set-PSReadLineOption -PredictionViewStyle InlineView
 ```
 
 ## 📖 Usage
@@ -230,13 +219,15 @@ Launch the interactive TUI search interface.
 
 **Keybindings:**
 
-- `↑/↓` - Navigate up/down
-- `Space` - Toggle selection (multi-select)
-- `Page Up/Down` - Scroll by page
-- `Ctrl+K/J` - Page up/down (vim-style)
+- `↑/↓` or `j/k` - Navigate up/down
+- `Space` - Toggle selection (multi-select, max 5 commands)
+- `Home/End` - Jump to first/last result
+- `Page Up/Down` or `Ctrl+K/J` - Scroll by page
+- `Ctrl+R` - Refresh search results
+- `Ctrl+U` - Clear search query
 - `Enter` - Select command(s) and exit
 - `Ctrl+C/Esc` - Exit without selection
-- Type to filter results in real-time
+- Type to filter results in real-time (case-insensitive)
 
 #### `zigstory fzf`
 
@@ -279,7 +270,7 @@ zigstory list 20
 
 #### `zigstory stats`
 
-Display usage statistics and insights.
+Display usage statistics and insights with ASCII visualizations.
 
 ```powershell
 zigstory stats
@@ -287,10 +278,26 @@ zigstory stats
 
 **Output:**
 
-- **Overview**: Total commands, unique count, history span
-- **Top Commands**: Most frequently used commands
-- **Activity**: Hourly usage distribution (ASCII chart)
-- **Directories**: Top working directories
+- **Overview**: Total commands, unique commands, history span
+- **Top Commands**: Most used commands ranked by frequency with last used time
+- **Success Rate**: Percentage of commands that succeeded (exit_code = 0)
+- **Activity**: Hourly usage distribution (ASCII bar chart)
+- **Directories**: Top 5 working directories by command count
+
+#### `zigstory recalc-rank`
+
+Recalculate frecency ranks for all commands in history.
+
+```powershell
+zigstory recalc-rank
+```
+
+**Features:**
+
+- Updates rank values based on current frequency and recency
+- Uses formula: `rank = (frequency * 2.0) + (100.0 / days_since_last_use)`
+- Progress tracking for large histories
+- Batch execution for performance
 
 #### `zigstory help`
 
@@ -323,7 +330,7 @@ See [docs/plan.md](docs/plan.md) for the detailed development roadmap.
 - [x] **Phase 2**: Write Path & Shell Integration ✅
 - [x] **Phase 3**: High-Performance Predictor ✅
 - [x] **Phase 4**: TUI Search Implementation ✅
-- [/] **Phase 5**: Frecency Ranking & Advanced Stats (In Progress)
+- [/] **Phase 5**: Frecency Ranking & Advanced Stats (Nearly Complete)
 
 ### Current Status
 
@@ -334,6 +341,17 @@ See [docs/plan.md](docs/plan.md) for the detailed development roadmap.
 - ✅ Keyboard navigation with vim-style bindings
 - ✅ Clipboard integration
 - ✅ Performance targets met
+
+**Phase 5 In Progress** - Advanced ranking and statistics are being implemented:
+
+- ✅ **Frecency Algorithm**: Hybrid frequency/recency scoring implemented
+- ✅ **Real-time Ranking**: Ranks calculated on every command execution
+- ✅ **Batch Recalculation**: `zigstory recalc-rank` command for re-ranking history
+- ✅ **Detailed Stats**: `zigstory stats` command with ASCII visualizations
+- ✅ **fzf Integration**: `zigstory fzf` command with Ctrl+F binding
+- ✅ **Performance**: Recalculation of 10k entries in <1s
+- ⏳ **Predictor Integration**: Update predictor to use rank-based sorting (planned)
+- ⏳ **Directory Filtering**: Context-aware search in TUI (planned)
 
 ## 🤝 Contributing
 
@@ -378,11 +396,23 @@ CREATE TABLE history (
     duration_ms INTEGER,
     session_id TEXT,
     hostname TEXT,
-    timestamp INTEGER DEFAULT (strftime('%s', 'now'))
+    timestamp INTEGER DEFAULT (strftime('%s', 'now')),
+    rank REAL DEFAULT 0
+);
+
+-- Command statistics for frecency
+CREATE TABLE command_stats (
+    cmd_hash TEXT PRIMARY KEY,
+    cmd TEXT NOT NULL,
+    frequency INTEGER DEFAULT 1,
+    last_used INTEGER NOT NULL
 );
 
 -- Index for prefix matching
 CREATE INDEX idx_cmd_prefix ON history(cmd COLLATE NOCASE);
+
+-- Index for rank-based sorting
+CREATE INDEX idx_rank ON history(rank DESC, timestamp DESC);
 
 -- FTS5 virtual table for full-text search
 CREATE VIRTUAL TABLE history_fts USING fts5(cmd, content='history', content_rowid='id');
