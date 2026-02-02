@@ -1085,7 +1085,45 @@ Task 4.6 is functionally complete with a working, usable solution. The automatic
 
 ---
 
-## Phase 5: Advanced Features
+#### Task 4.7: Multi-Select Support ✅ COMPLETED
+
+**Action:** Implement multi-selection of commands for piped execution  
+**File:** `src/tui/main.zig`, `src/tui/render.zig`  
+**Completion Date:** 2026-01-15  
+**Status:** COMPLETED
+
+**Features:**
+
+1. **Selection Logic:**
+   - Toggle selection with `Space`
+   - Store selected commands in chronological order
+   - Deep copy selected entries (memory safety)
+   - Max 5 selections limit
+
+2. **Visual Feedback:**
+   - Visual indicator `[x]` for selected rows
+   - Status bar shows count (e.g., `| 2 selected`)
+   - Handle overlapping columns in render engine
+
+3. **Execution:**
+   - On `Enter`, concatenate selected commands with `|`
+   - Example: `git status | Select-String "modified"`
+
+**Verification:**
+
+- ✅ Space toggles selection state
+- ✅ Maximum limit of 5 enforced
+- ✅ Visual indicators render correctly
+- ✅ Chronological order preserved in output
+- ✅ Piped command string generated correctly
+
+---
+
+## Phase 5: Advanced Features ✅ COMPLETED
+
+**Completion Date:** 2026-02-02  
+**Status:** All tasks complete (5/5)  
+**Acceptance Criteria Met:** 19/20 (95%)
 
 ### Objective
 
@@ -1093,7 +1131,7 @@ Implement frecency ranking algorithms and context-aware directory filtering.
 
 ### Tasks
 
-#### Task 5.1: Frecency Ranking System
+#### Task 5.1: Frecency Ranking System ✅ COMPLETED
 
 **Action:** Add rank-based command scoring  
 **Database Schema Update:**
@@ -1146,7 +1184,7 @@ CREATE TABLE command_stats (
 
 ---
 
-#### Task 5.2: Rank Calculation Background Job
+#### Task 5.2: Rank Calculation Background Job ✅ COMPLETED
 
 **Action:** Implement periodic rank recalculation  
 **File:** `src/cli/recalc.zig`  
@@ -1188,7 +1226,7 @@ WHERE id BETWEEN ? AND ?;
 
 ---
 
-#### Task 5.3: Context-Aware Directory Filtering
+#### Task 5.3: Context-Aware Directory Filtering ✅ COMPLETED
 
 **Action:** Add directory filter toggle in TUI  
 **File:** `src/tui/directory_filter.zig`  
@@ -1236,7 +1274,7 @@ ORDER BY ...;
 
 ---
 
-#### Task 5.4: Statistics Dashboard
+#### Task 5.4: Statistics Dashboard ✅ COMPLETED
 
 **Action:** Implement command to display history statistics  
 **File:** `src/cli/stats.zig`  
@@ -1311,7 +1349,7 @@ ORDER BY hour;
 
 ---
 
-#### Task 5.5: fzf Integration
+#### Task 5.5: fzf Integration ✅ COMPLETED
 
 **Action:** Implement standalone fzf integration for fuzzy searching  
 **File:** `src/cli/fzf.zig`  
@@ -1403,26 +1441,26 @@ fzf.stderr_behavior = .Inherit;
 
 ### Acceptance Criteria
 
-- [ ] `rank` column added to history table
-- [ ] Frequency tracking in `command_stats` table functional
-- [ ] Frecency algorithm implemented correctly
-- [ ] Rank calculated on each command insertion
-- [ ] `zigstory recalc-rank` command works
-- [ ] Recalculation completes in <1s for 10,000 entries
-- [ ] Ctrl+F toggles directory filter in TUI
-- [ ] Status line shows current filter mode
-- [ ] Current directory mode filters by `cwd` column
-- [ ] `zigstory stats` command displays all statistics
-- [ ] Top 10 commands shown with count and last used
-- [ ] ASCII bar charts render for time distribution
-- [ ] Success rate calculated and displayed
-- [ ] Predictor updated to use `ORDER BY rank DESC, timestamp DESC`
-- [ ] `zigstory fzf` command exists and launches fzf with command history
-- [ ] Commands are deduplicated (most recent shown) in fzf
-- [ ] Selected command prints to stdout from fzf
-- [ ] Ctrl+F in PowerShell launches fzf (not TUI)
-- [ ] Graceful error message when fzf not installed
-- [ ] fzf integration does not interfere with TUI's Ctrl+F (directory filter)
+- [x] `rank` column added to history table
+- [x] Frequency tracking in `command_stats` table functional
+- [x] Frecency algorithm implemented correctly
+- [x] Rank calculated on each command insertion
+- [x] `zigstory recalc-rank` command works
+- [ ] Recalculation completes in <1s for 10,000 entries (requires performance testing)
+- [x] Ctrl+F toggles directory filter in TUI
+- [x] Status line shows current filter mode
+- [x] Current directory mode filters by `cwd` column
+- [x] `zigstory stats` command displays all statistics
+- [x] Top 10 commands shown with count and last used
+- [x] ASCII bar charts render for time distribution
+- [x] Success rate calculated and displayed
+- [x] Predictor updated to use `ORDER BY rank DESC, timestamp DESC`
+- [x] `zigstory fzf` command exists and launches fzf with command history
+- [x] Commands are deduplicated (most recent shown) in fzf
+- [x] Selected command prints to stdout from fzf
+- [x] Ctrl+F in PowerShell launches fzf (not TUI)
+- [x] Graceful error message when fzf not installed
+- [x] fzf integration does not interfere with TUI's Ctrl+F (directory filter)
 
 ### Deliverables
 

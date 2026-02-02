@@ -29,7 +29,7 @@ pub const ColumnConfig = struct {
     timestamp_width: u16 = 10,
     duration_width: u16 = 9,
     directory_width: u16 = 18,
-    indicator_width: u16 = 2,
+    indicator_width: u16 = 6,
     padding: u16 = 2,
 
     pub fn commandWidth(self: ColumnConfig, term_width: u16) u16 {
@@ -136,7 +136,8 @@ pub fn renderEntry(
     allocator: std.mem.Allocator,
     entry: scrolling.HistoryEntry,
     row: u16,
-    is_selected: bool,
+    is_cursor_on_row: bool,
+    is_in_selection_set: bool,
     search_query: ?[]const u8,
     _: ColumnConfig,
 ) !void {
@@ -144,12 +145,12 @@ pub fn renderEntry(
     const is_failed = entry.exit_code != 0;
 
     const base_fg: vaxis.Color = if (is_failed) colors.fg_error else colors.fg_primary;
-    const base_bg: vaxis.Color = if (is_selected) colors.bg_selected else colors.bg_primary;
+    const base_bg: vaxis.Color = if (is_cursor_on_row) colors.bg_selected else colors.bg_primary;
 
     const base_style = vaxis.Style{
         .fg = base_fg,
         .bg = base_bg,
-        .bold = is_selected,
+        .bold = is_cursor_on_row,
     };
 
     const dimmed_style = vaxis.Style{
@@ -171,24 +172,29 @@ pub fn renderEntry(
         .bg = base_bg,
         .bold = true,
     };
-    const indicator: []const u8 = if (is_selected) "> " else "  ";
+    const cursor_ind = if (is_cursor_on_row) ">" else " ";
+    const select_ind = if (is_in_selection_set) "[x]" else "   ";
+
+    var ind_buf: [32]u8 = undefined;
+    const ind_raw = std.fmt.bufPrint(&ind_buf, "{s}{s} ", .{ cursor_ind, select_ind }) catch "> [x] ";
+    const indicator = try allocator.dupe(u8, ind_raw);
+
     _ = win.printSegment(.{ .text = indicator, .style = indicator_style }, .{ .row_offset = row, .col_offset = 0 });
 
-    // Column 2-11: Timestamp (10 chars)
     var time_buf: [32]u8 = undefined;
     const time_raw = formatRelativeTime(entry.timestamp, &time_buf);
     const time_text = try allocator.dupe(u8, time_raw);
-    _ = win.printSegment(.{ .text = time_text, .style = dimmed_style }, .{ .row_offset = row, .col_offset = 2 });
+    _ = win.printSegment(.{ .text = time_text, .style = dimmed_style }, .{ .row_offset = row, .col_offset = 6 });
 
-    // Column 12-20: Duration (9 chars, only if > 1s)
+    // Column 16-25: Duration (9 chars, only if > 1s)
     var dur_buf: [32]u8 = undefined;
     if (formatDuration(entry.duration_ms, &dur_buf)) |dur_raw| {
         const dur_text = try allocator.dupe(u8, dur_raw);
-        _ = win.printSegment(.{ .text = dur_text, .style = duration_style }, .{ .row_offset = row, .col_offset = 12 });
+        _ = win.printSegment(.{ .text = dur_text, .style = duration_style }, .{ .row_offset = row, .col_offset = 16 });
     }
 
-    // Column 21+: Command (rest of line)
-    const cmd_start: u16 = 21;
+    // Column 25+: Command (rest of line)
+    const cmd_start: u16 = 25;
     const max_cmd_len: usize = if (term_width > cmd_start + 2) term_width - cmd_start - 2 else 20;
 
     var display_cmd = entry.cmd;
@@ -198,7 +204,7 @@ pub fn renderEntry(
 
     if (search_query) |query| {
         if (query.len > 0) {
-            renderHighlightedText(win, display_cmd, query, row, cmd_start, base_style, is_selected, base_bg);
+            renderHighlightedText(win, display_cmd, query, row, cmd_start, base_style, is_cursor_on_row, base_bg);
         } else {
             _ = win.printSegment(.{ .text = display_cmd, .style = base_style }, .{ .row_offset = row, .col_offset = cmd_start });
         }
@@ -289,6 +295,8 @@ pub fn renderStatusBar(
     total_count: usize,
     selected_index: usize,
     result_count: usize,
+    selections_count: usize,
+    filter_mode: ?[]const u8,
 ) !void {
     const bar_style = vaxis.Style{
         .fg = colors.fg_dimmed,
@@ -296,7 +304,7 @@ pub fn renderStatusBar(
     };
     fillRowBackground(win, 1, bar_style);
 
-    var status_buf: [256]u8 = undefined;
+    var status_buf: [512]u8 = undefined;
     var status_text: []const u8 = "";
 
     const search_style = vaxis.Style{
@@ -306,12 +314,19 @@ pub fn renderStatusBar(
     };
 
     if (is_searching) {
-        status_text = std.fmt.bufPrint(&status_buf, " Search: {s}| ({d} results)", .{ query, result_count }) catch " Error ";
+        status_text = std.fmt.bufPrint(&status_buf, " Search: {s}| ({d} results) {s} | [FILTER: {s}]", .{
+            query,
+            result_count,
+            if (selections_count > 0) std.fmt.bufPrint(status_buf[256..], "| {d} selected", .{selections_count}) catch "" else "",
+            filter_mode orelse "Global",
+        }) catch " Error ";
     } else {
-        status_text = std.fmt.bufPrint(&status_buf, " {d} commands | {d}/{d} | Type to search ", .{
+        status_text = std.fmt.bufPrint(&status_buf, " {d} commands | {d}/{d} | Type to search {s} | [FILTER: {s}]", .{
             total_count,
             if (total_count > 0) selected_index + 1 else 0,
             total_count,
+            if (selections_count > 0) std.fmt.bufPrint(status_buf[256..], "| {d} selected", .{selections_count}) catch "" else "",
+            filter_mode orelse "Global",
         }) catch " Error ";
     }
 
@@ -346,6 +361,7 @@ pub fn renderHelpBar(win: vaxis.Window) void {
         .{ .key = "PgUp/Dn", .desc = " Page  " },
         .{ .key = "Home/End", .desc = " Jump  " },
         .{ .key = "Ctrl+U", .desc = " Clear  " },
+        .{ .key = "Ctrl+F", .desc = " Toggle Filter  " },
         .{ .key = "", .desc = "Type to search" },
     };
 

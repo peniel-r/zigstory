@@ -12,6 +12,8 @@ pub const History = struct {
     timestamp: i64,
 };
 
+const ranking = @import("ranking.zig");
+
 pub fn initDb(path: [:0]const u8) !sqlite.Db {
     var db = try sqlite.Db.init(.{
         .mode = sqlite.Db.Mode{ .File = path },
@@ -116,6 +118,9 @@ pub fn initDb(path: [:0]const u8) !sqlite.Db {
     if (history_count != fts_count or history_max != fts_max) {
         try db.exec("INSERT INTO history_fts(history_fts) VALUES('rebuild')", .{}, .{});
     }
+
+    // Initialize ranking system (tables and columns)
+    try ranking.initRanking(&db);
 
     return db;
 }

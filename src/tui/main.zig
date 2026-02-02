@@ -5,6 +5,7 @@ const scrolling = @import("scrolling.zig");
 const search_logic = @import("search.zig");
 const render = @import("render.zig");
 const navigation = @import("navigation.zig");
+const directory_filter = @import("directory_filter.zig");
 
 /// Custom panic handler for proper terminal cleanup
 pub const panic = vaxis.panic_handler;
@@ -41,11 +42,12 @@ const TuiApp = struct {
 
     // Search state (replaces current_entries)
     search_state: search_logic.SearchState,
+    selections: std.ArrayListUnmanaged(scrolling.HistoryEntry) = .{},
 
     selected_index: usize = 0,
 
-    /// Initialize the TUI application
-    pub fn init(allocator: std.mem.Allocator, db: *sqlite.Db) !TuiApp {
+    /// Initialize TUI application
+    pub fn init(allocator: std.mem.Allocator, db: *sqlite.Db, current_dir: ?[]const u8) !TuiApp {
         var buffer: [1024]u8 = undefined;
         var tty = try vaxis.Tty.init(&buffer);
         errdefer tty.deinit();
@@ -74,6 +76,8 @@ const TuiApp = struct {
         };
 
         var search_state = search_logic.SearchState.init(allocator);
+        // Set current directory for filtering
+        search_state.filter_state = directory_filter.DirectoryFilterState.init(current_dir);
 
         // Fetch initial page of entries (Browsing mode)
         search_state.results = try scrolling.fetchHistoryPage(
@@ -93,6 +97,7 @@ const TuiApp = struct {
             .db = db,
             .scroll_state = scroll_state,
             .search_state = search_state,
+            .selections = .{},
         };
     }
 
@@ -135,15 +140,72 @@ const TuiApp = struct {
         self.selected_index = 0;
     }
 
+    /// Toggle selection of an entry
+    fn toggleSelection(self: *TuiApp, entry: scrolling.HistoryEntry) !void {
+        // Check if already selected (by ID)
+        for (self.selections.items, 0..) |s, i| {
+            if (s.id == entry.id) {
+                // Remove selection
+                self.allocator.free(s.cmd);
+                self.allocator.free(s.cwd);
+                _ = self.selections.orderedRemove(i);
+                return;
+            }
+        }
+
+        // Add selection if not full
+        if (self.selections.items.len < 5) {
+            const new_entry = scrolling.HistoryEntry{
+                .id = entry.id,
+                .cmd = try self.allocator.dupe(u8, entry.cmd),
+                .cwd = try self.allocator.dupe(u8, entry.cwd),
+                .exit_code = entry.exit_code,
+                .duration_ms = entry.duration_ms,
+                .timestamp = entry.timestamp,
+            };
+            try self.selections.append(self.allocator, new_entry);
+        } else {
+            // TODO: Show flash message or visual feedback that limit is reached
+            // For now, simpler implementation: just do nothing
+        }
+    }
+
     /// Handle keyboard and terminal events
     fn handleEvent(self: *TuiApp, event: Event) !void {
         switch (event) {
             .key_press => |key| {
+                // Toggles selection with Space
+                if (key.matches(' ', .{})) {
+                    const entry = try navigation.getSelectedCommandEntry(
+                        self.search_state.results,
+                        self.selected_index,
+                        self.scroll_state.scroll_position,
+                        self.isSearching(),
+                    );
+
+                    if (entry) |e| {
+                        try self.toggleSelection(e);
+                    }
+                    return;
+                }
+
                 // Handle backspace for search first (before navigation)
                 if (key.matches(vaxis.Key.backspace, .{})) {
                     if (self.search_state.query.items.len > 0) {
                         _ = self.search_state.query.pop();
                         try self.performFuzzySearch();
+                    }
+                    return;
+                }
+
+                // Handle Ctrl+F to toggle directory filter
+                if (key.matches('f', .{ .ctrl = true })) {
+                    self.search_state.filter_state.toggleMode();
+                    // Refresh results after toggling filter
+                    if (self.isSearching()) {
+                        try self.performFuzzySearch();
+                    } else {
+                        try self.refreshEntries();
                     }
                     return;
                 }
@@ -178,14 +240,26 @@ const TuiApp = struct {
                         self.should_quit = true;
                     },
                     .select => {
-                        // Get selected command
-                        self.selected_command = try navigation.getSelectedCommand(
-                            self.allocator,
-                            self.search_state.results,
-                            self.selected_index,
-                            self.scroll_state.scroll_position,
-                            self.isSearching(),
-                        );
+                        if (self.selections.items.len > 0) {
+                            // Construct piped command from selections
+                            var piped_cmd = std.ArrayListUnmanaged(u8){};
+                            defer piped_cmd.deinit(self.allocator);
+
+                            for (self.selections.items, 0..) |sel, i| {
+                                if (i > 0) try piped_cmd.appendSlice(self.allocator, " | ");
+                                try piped_cmd.appendSlice(self.allocator, sel.cmd);
+                            }
+                            self.selected_command = try piped_cmd.toOwnedSlice(self.allocator);
+                        } else {
+                            // Single selection fallback
+                            self.selected_command = try navigation.getSelectedCommand(
+                                self.allocator,
+                                self.search_state.results,
+                                self.selected_index,
+                                self.scroll_state.scroll_position,
+                                self.isSearching(),
+                            );
+                        }
                         self.should_quit = true;
                     },
                     .refresh => {
@@ -259,6 +333,7 @@ const TuiApp = struct {
 
         // Render status/search bar (row 1)
         const search_query = self.search_state.query.items;
+        const filter_mode_str = self.search_state.filter_state.mode.toString();
         try render.renderStatusBar(
             win,
             allocator,
@@ -267,6 +342,8 @@ const TuiApp = struct {
             self.scroll_state.total_count,
             self.selected_index,
             self.search_state.results.len,
+            self.selections.items.len,
+            filter_mode_str,
         );
 
         // Draw entries starting at row 2
@@ -305,6 +382,15 @@ const TuiApp = struct {
             // Get search query for highlighting (only if searching)
             const query_for_highlight: ?[]const u8 = if (self.isSearching()) self.search_state.query.items else null;
 
+            // Check if selected
+            var is_in_selection_set = false;
+            for (self.selections.items) |s| {
+                if (s.id == entry.id) {
+                    is_in_selection_set = true;
+                    break;
+                }
+            }
+
             // Render the entry using the render module
             try render.renderEntry(
                 win,
@@ -312,6 +398,7 @@ const TuiApp = struct {
                 entry,
                 row,
                 is_selected,
+                is_in_selection_set,
                 query_for_highlight,
                 render.default_config,
             );
@@ -325,6 +412,11 @@ const TuiApp = struct {
     pub fn deinit(self: *TuiApp) void {
         self.arena.deinit();
         self.search_state.deinit(self.allocator);
+        for (self.selections.items) |item| {
+            self.allocator.free(item.cmd);
+            self.allocator.free(item.cwd);
+        }
+        self.selections.deinit(self.allocator);
         self.vx.deinit(self.allocator, self.tty.writer());
         self.tty.deinit();
         self.* = undefined;
@@ -332,8 +424,8 @@ const TuiApp = struct {
 };
 
 /// Entry point for TUI search interface
-pub fn search(allocator: std.mem.Allocator, db: *sqlite.Db) !?[]const u8 {
-    var app = try TuiApp.init(allocator, db);
+pub fn search(allocator: std.mem.Allocator, db: *sqlite.Db, current_dir: ?[]const u8) !?[]const u8 {
+    var app = try TuiApp.init(allocator, db, current_dir);
     defer app.deinit();
     try app.run();
 

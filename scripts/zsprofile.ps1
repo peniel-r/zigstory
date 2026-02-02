@@ -2,9 +2,22 @@
 # zigstory PowerShell Profile Integration
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Resolve paths relative to this script
-$RepoRoot = Resolve-Path "$PSScriptRoot\.."
-$Global:ZigstoryBin = Join-Path $RepoRoot "zig-out\bin\zigstory.exe"
+# Auto-detect zigstory executable location
+# Try APPDATA first (installed), then repository (dev)
+$AppDataExe = Join-Path $env:APPDATA "zigstory\zigstory.exe"
+if (Test-Path $AppDataExe) {
+    $Global:ZigstoryBin = $AppDataExe
+} else {
+    # Try to find in repository (dev mode)
+    $ScriptRepoRoot = Split-Path -Parent $PSScriptRoot
+    $DevExe = Join-Path $ScriptRepoRoot "zig-out\bin\zigstory.exe"
+    if (Test-Path $DevExe) {
+        $Global:ZigstoryBin = $DevExe
+    } else {
+        # Last resort: assume it's in PATH
+        $Global:ZigstoryBin = "zigstory.exe"
+    }
+}
 
 # Commands to skip
 $Global:ZigstorySkipPatterns = @(
@@ -80,11 +93,21 @@ function Global:Prompt {
 Write-Host "zigstory enabled!" -ForegroundColor Green
 
 # Load zigstory predictor assembly
-# Check both Release (dev) and publish (release) locations
-$possibleDllPaths = @(
-    (Join-Path $RepoRoot "src\predictor\bin\Release\net8.0\zigstoryPredictor.dll"),
-    (Join-Path $RepoRoot "src\predictor\bin\publish\zigstoryPredictor.dll")
-)
+# Auto-detect predictor DLL location
+$PredictorModuleDir = Join-Path $env:USERPROFILE "Documents\PowerShell\Modules\zigstoryPredictor"
+$ModulesDll = Join-Path $PredictorModuleDir "zigstoryPredictor.dll"
+
+# Try modules directory first (installed), then repository (dev)
+$possibleDllPaths = @()
+if (Test-Path $ModulesDll) {
+    $possibleDllPaths += $ModulesDll
+} else {
+    # Dev mode: check repository
+    $ScriptRepoRoot = Split-Path -Parent $PSScriptRoot
+    $possibleDllPaths += Join-Path $ScriptRepoRoot "src\predictor\bin\publish\zigstoryPredictor.dll"
+    $possibleDllPaths += Join-Path $ScriptRepoRoot "src\predictor\bin\Release\net8.0\zigstoryPredictor.dll"
+    $possibleDllPaths += Join-Path $ScriptRepoRoot "src\predictor\bin\Debug\net8.0\zigstoryPredictor.dll"
+}
 
 $dllLoaded = $false
 foreach ($dllPath in $possibleDllPaths) {
@@ -112,8 +135,13 @@ if ($dllLoaded) {
     }
 
     # Enable predictive IntelliSense
-    Set-PSReadLineOption -PredictionSource Plugin
-    Set-PSReadLineOption -PredictionViewStyle ListView
+    # IMPORTANT: Use ONLY Plugin to avoid [History] tag showing up
+    Set-PSReadLineOption -PredictionSource Plugin -ErrorAction SilentlyContinue
+    Set-PSReadLineOption -PredictionViewStyle ListView -ErrorAction SilentlyContinue
+    
+    Write-Host "Predictive IntelliSense enabled (Plugin mode)" -ForegroundColor Green
+} else {
+    Write-Host "Warning: zigstory predictor DLL not loaded - history recording only" -ForegroundColor Yellow
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

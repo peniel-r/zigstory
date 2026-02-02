@@ -1,5 +1,7 @@
 const std = @import("std");
 const sqlite = @import("sqlite");
+const zigstory = @import("zigstory");
+const ranking = zigstory.ranking;
 
 /// Parameters for the add command
 pub const AddParams = struct {
@@ -109,4 +111,27 @@ pub fn addCommand(db: *sqlite.Db, params: AddParams, allocator: std.mem.Allocato
         .session_id = session_id,
         .hostname = hostname,
     });
+
+    // Update ranking stats
+    // Get last insert rowid using SQL
+    var id_stmt = try db.prepare("SELECT last_insert_rowid() AS id");
+    defer id_stmt.deinit();
+
+    // Result struct
+    const Result = struct { id: i64 };
+    var iter = try id_stmt.iterator(Result, .{});
+
+    if (try iter.next(.{})) |row| {
+        const history_id = row.id;
+        const cmd_hash = try ranking.getCommandHash(params.cmd, allocator);
+        defer allocator.free(cmd_hash);
+
+        const frecency_config = ranking.FrecencyConfig{};
+
+        // Update command stats (frequency, last_used)
+        try ranking.updateCommandStats(db, params.cmd, cmd_hash, std.time.timestamp());
+
+        // Calculate and update rank for this entry
+        try ranking.updateHistoryRank(db, history_id, cmd_hash, frecency_config);
+    }
 }

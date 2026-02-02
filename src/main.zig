@@ -9,6 +9,9 @@ const fzf_search = @import("cli/fzf.zig");
 const tui = @import("tui/main.zig");
 const clipboard = @import("clipboard.zig");
 const help = @import("cli/help.zig");
+const stats = @import("cli/stats.zig");
+const ranking = zigstory.ranking;
+const recalc = @import("cli/recalc.zig");
 
 // Use libvaxis panic handler for proper terminal cleanup
 pub const panic = vaxis.panic_handler;
@@ -110,8 +113,15 @@ pub fn main() !void {
             };
             defer db.deinit();
 
+            // Get current working directory for filter
+            const cwd = std.process.getCwdAlloc(allocator) catch |err| {
+                std.debug.print("Error getting current directory: {}\n", .{err});
+                std.process.exit(1);
+            };
+            defer allocator.free(cwd);
+
             // Launch TUI search interface
-            const result = tui.search(allocator, &db) catch |err| {
+            const result = tui.search(allocator, &db, cwd) catch |err| {
                 std.debug.print("Error launching TUI: {}\n", .{err});
                 std.process.exit(1);
             };
@@ -185,7 +195,36 @@ pub fn main() !void {
             }
         },
         .stats => {
-            std.debug.print("STATS command\n", .{});
+            // Get or create default database path
+            const home_dir = std.process.getEnvVarOwned(allocator, "USERPROFILE") catch |err| blk: {
+                if (err == error.EnvironmentVariableNotFound) {
+                    break :blk std.process.getEnvVarOwned(allocator, "HOME") catch {
+                        std.debug.print("Error: Could not determine home directory: {}\n", .{err});
+                        std.process.exit(1);
+                    };
+                }
+                std.debug.print("Error getting home directory: {}\n", .{err});
+                std.process.exit(1);
+            };
+            defer allocator.free(home_dir);
+
+            const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
+            defer allocator.free(db_path);
+
+            const db_path_z = try allocator.dupeZ(u8, db_path);
+            defer allocator.free(db_path_z);
+
+            // Initialize database
+            var db = zigstory.db.initDb(db_path_z) catch |err| {
+                std.debug.print("Error initializing database: {}\n", .{err});
+                std.process.exit(1);
+            };
+            defer db.deinit();
+
+            stats.run(&db, allocator) catch |err| {
+                std.debug.print("Error running stats: {}\n", .{err});
+                std.process.exit(1);
+            };
         },
         .list => |args| {
             // Get or create default database path
@@ -277,6 +316,42 @@ pub fn main() !void {
                 };
                 allocator.free(cmd);
             }
+        },
+        .recalc_rank => {
+            // Get or create default database path
+            const home_dir = std.process.getEnvVarOwned(allocator, "USERPROFILE") catch |err| blk: {
+                if (err == error.EnvironmentVariableNotFound) {
+                    break :blk std.process.getEnvVarOwned(allocator, "HOME") catch {
+                        std.debug.print("Error: Could not determine home directory\n", .{});
+                        std.process.exit(1);
+                    };
+                }
+                std.debug.print("Error getting home directory: {}\n", .{err});
+                std.process.exit(1);
+            };
+            defer allocator.free(home_dir);
+
+            const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
+            defer allocator.free(db_path);
+
+            // Ensure directory exists
+            const db_dir = std.fs.path.dirname(db_path) orelse ".";
+            std.fs.cwd().makePath(db_dir) catch |err| {
+                std.debug.print("Error creating database directory: {}\n", .{err});
+                std.process.exit(1);
+            };
+
+            const db_path_z = try allocator.dupeZ(u8, db_path);
+            defer allocator.free(db_path_z);
+
+            // Recalculate ranks using CLI module
+            recalc.recalcRanks(.{
+                .db_path = db_path_z,
+                .verbose = true,
+            }, allocator) catch |err| {
+                std.debug.print("Error recalculating ranks: {}\n", .{err});
+                std.process.exit(1);
+            };
         },
         .help => {
             help.printHelp();
