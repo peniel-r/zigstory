@@ -110,27 +110,45 @@ The system uses a **Split-Brain Architecture** optimized for both write and read
 
 ## 📦 Installation
 
-### Option 1: Build from Source
+### Automated Installation (Recommended)
+
+The easiest way to install `zigstory` is using the provided installation script. This script handles building the binaries, setting up the PowerShell profile integration, and installing the predictor module.
 
 ```powershell
 # 1. Clone the repository
 git clone https://github.com/yourusername/zigstory.git
 cd zigstory
 
-# 2. Build the Zig CLI
-zig build -Doptimize=ReleaseFast
-
-# 3. Build the C# Predictor
-dotnet build -c Release src/predictor/zigstoryPredictor.csproj
-
-# 4. The binaries will be at:
-#    - zig-out/bin/zigstory.exe
-#    - src/predictor/bin/Release/net8.0/zigstoryPredictor.dll
+# 2. Build and install automatically
+just install
 ```
 
-### Option 2: Download Pre-built Binaries
+The script will:
 
-*(Coming soon - check [Releases](https://github.com/yourusername/zigstory/releases))*
+- ✅ Build the Zig CLI and C# Predictor
+- ✅ Copy binaries to `%APPDATA%\zigstory`
+- ✅ Add `zigstory` to your User PATH
+- ✅ Install the `zigstoryPredictor` module to your PowerShell Modules directory
+- ✅ Add the necessary integration to your PowerShell `$PROFILE`
+
+### Manual Installation
+
+If you prefer to install manually:
+
+1. **Build the Zig CLI**:
+
+   ```powershell
+   zig build -Doptimize=ReleaseFast
+   ```
+
+2. **Build the C# Predictor**:
+
+   ```powershell
+   dotnet publish src/predictor/zigstoryPredictor.csproj -c Release -r win-x64 --self-contained false -o src/predictor/bin/publish
+   ```
+
+3. **Register the module**:
+   Copy the contents of `src/predictor/bin/publish` to your PowerShell modules directory (e.g., `Documents\PowerShell\Modules\zigstoryPredictor`).
 
 ## ⚙️ Configuration
 
@@ -219,15 +237,20 @@ Launch the interactive TUI search interface.
 
 **Keybindings:**
 
-- `↑/↓` or `j/k` - Navigate up/down
-- `Space` - Toggle selection (multi-select, max 5 commands)
-- `Home/End` - Jump to first/last result
-- `Page Up/Down` or `Ctrl+K/J` - Scroll by page
-- `Ctrl+R` - Refresh search results
-- `Ctrl+U` - Clear search query
-- `Enter` - Select command(s) and exit
-- `Ctrl+C/Esc` - Exit without selection
 - Type to filter results in real-time (case-insensitive)
+
+### ⌨️ Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| **F2** | **Toggle predictive IntelliSense on/off** (Ghost text/ListView) |
+| **Right Arrow** | Accept current prediction suggestion |
+| **Ctrl+F** (in terminal) | Cycle through predictions (if multiple) |
+| **Ctrl+R** | Open Interactive TUI search |
+| **Ctrl+F** (in TUI) | Open fzf-based fuzzy search |
+| **j/k** or **↑/↓** (in TUI)| Navigate search results |
+| **Enter** (in TUI) | Accept selection and copy to clipboard |
+| **Esc** (in TUI) | Close search without selection |
 
 #### `zigstory fzf`
 

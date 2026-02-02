@@ -35,7 +35,7 @@ public class ZigstoryPredictor : ICommandPredictor
     private static List<PredictiveSuggestion>? _suggestionBuffer;
     
     public Guid Id => _guid;
-    public string Name => "ZigstoryPredictor";
+    public string Name => "Zigstory";
     public string Description => "Zig-based shell history predictor with sub-5ms query performance";
 
     public ZigstoryPredictor()
