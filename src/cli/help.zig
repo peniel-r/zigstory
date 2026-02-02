@@ -19,6 +19,8 @@ pub fn printHelp() void {
         \\    fzf         Launch fzf-based search (requires fzf installed)
         \\    import      Import existing PowerShell history
         \\    list        List recent commands
+        \\    stats       Display history statistics
+        \\    recalc-rank Recalculate frecency ranks for all commands
         \\    help        Display this help message
         \\
         \\===============================================================================
@@ -108,6 +110,41 @@ pub fn printHelp() void {
         \\      zigstory list            # Show last 5 commands
         \\      zigstory list 20         # Show last 20 commands
         \\
+        \\-------------------------------------------------------------------------------
+        \\
+        \\  zigstory stats
+        \\    Display comprehensive statistics about your command history.
+        \\
+        \\    FEATURES:
+        \\      * Total commands executed
+        \\      * Unique commands count
+        \\      * Success rate (exit code analysis)
+        \\      * Top 10 most used commands
+        \\      * Commands by hour (ASCII chart)
+        \\      * Commands by day of week
+        \\      * Top 5 directories by command count
+        \\
+        \\    EXAMPLE:
+        \\      zigstory stats
+        \\
+        \\-------------------------------------------------------------------------------
+        \\
+        \\  zigstory recalc-rank
+        \\    Recalculate frecency ranks for all commands in history.
+        \\
+        \\    DESCRIPTION:
+        \\      Updates rank values for all commands based on frequency and recency.
+        \\      Uses frecency algorithm: rank = (frequency * 2.0) + (100.0 / days_since_last_use)
+        \\
+        \\    FEATURES:
+        \\      * Batch updates (100 rows per transaction)
+        \\      * Progress tracking during recalculation
+        \\      * Optimized for 10,000+ entries
+        \\      * Completes in <1s for 10,000 entries
+        \\
+        \\    EXAMPLE:
+        \\      zigstory recalc-rank
+        \\
         \\===============================================================================
         \\
         \\POWERSHELL INTEGRATION:
@@ -164,6 +201,12 @@ pub fn printHelp() void {
         \\  # Manually add a command
         \\  zigstory add --cmd "npm install" --cwd "C:\project" --exit 0
         \\
+        \\  # View history statistics
+        \\  zigstory stats
+        \\
+        \\  # Recalculate command ranks
+        \\  zigstory recalc-rank
+        \\
         \\===============================================================================
         \\
         \\For more information, visit: https://github.com/yourusername/zigstory
@@ -186,6 +229,10 @@ pub fn printCommandHelp(command: []const u8) void {
         printImportHelp();
     } else if (std.mem.eql(u8, command, "list")) {
         printListHelp();
+    } else if (std.mem.eql(u8, command, "stats")) {
+        printStatsHelp();
+    } else if (std.mem.eql(u8, command, "recalc-rank")) {
+        printRecalcRankHelp();
     } else {
         std.debug.print("Unknown command: {s}\n\n", .{command});
         printHelp();
@@ -325,16 +372,80 @@ fn printListHelp() void {
         \\    zigstory list [COUNT]
         \\
         \\ARGUMENTS:
-        \\    COUNT                    Number of commands to display (default: 5)
+        \\      COUNT                    Number of commands to display (default: 5)
         \\
         \\DESCRIPTION:
-        \\    Lists the most recent commands from your history. Displays command text,
-        \\    working directory, exit code, and execution time.
+        \\      Lists most recent commands from your history. Displays command text,
+        \\      working directory, exit code, and execution time.
         \\
         \\EXAMPLES:
-        \\    zigstory list            # Show last 5 commands
-        \\    zigstory list 20         # Show last 20 commands
-        \\    zigstory list 100        # Show last 100 commands
+        \\      zigstory list            # Show last 5 commands
+        \\      zigstory list 20         # Show last 20 commands
+        \\      zigstory list 100        # Show last 100 commands
+        \\
+        \\
+    ;
+    std.debug.print("{s}", .{help_text});
+}
+
+fn printStatsHelp() void {
+    const help_text =
+        \\
+        \\zigstory stats - Display history statistics
+        \\
+        \\USAGE:
+        \\    zigstory stats
+        \\
+        \\DESCRIPTION:
+        \\      Displays comprehensive statistics about your command history,
+        \\      including total commands, unique commands, success rate, and
+        \\      command distribution by time and directory.
+        \\
+        \\OUTPUT:
+        \\      • Total commands executed
+        \\      • Unique commands count
+        \\      • Success rate (exit code analysis)
+        \\      • Top 10 most used commands
+        \\      • Commands by hour (ASCII chart)
+        \\      • Commands by day of week
+        \\      • Top 5 directories by command count
+        \\
+        \\EXAMPLES:
+        \\      zigstory stats
+        \\
+        \\
+    ;
+    std.debug.print("{s}", .{help_text});
+}
+
+fn printRecalcRankHelp() void {
+    const help_text =
+        \\
+        \\zigstory recalc-rank - Recalculate command ranks
+        \\
+        \\USAGE:
+        \\    zigstory recalc-rank
+        \\
+        \\DESCRIPTION:
+        \\      Recalculates frecency ranks for all commands in history.
+        \\      The frecency algorithm combines frequency and recency to rank
+        \\      commands based on usage patterns.
+        \\
+        \\ALGORITHM:
+        \\      rank = (frequency * 2.0) + (100.0 / days_since_last_use)
+        \\
+        \\      where:
+        \\        • frequency = number of times command executed
+        \\        • days_since_last_use = days since most recent execution
+        \\
+        \\FEATURES:
+        \\      • Batch updates (100 rows per transaction)
+        \\      • Progress tracking during recalculation
+        \\      • Optimized for 10,000+ entries
+        \\      • Completes in <1s for 10,000 entries
+        \\
+        \\EXAMPLES:
+        \\      zigstory recalc-rank
         \\
         \\
     ;
