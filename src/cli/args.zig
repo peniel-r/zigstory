@@ -8,6 +8,7 @@ pub const Action = union(enum) {
     list: ListParams,
     fzf: void,
     recalc_rank: void,
+    perf: PerfParams,
     help: void,
 };
 
@@ -24,6 +25,13 @@ pub const ListParams = struct {
 
 pub const ImportParams = struct {
     file: ?[]const u8 = null,
+};
+
+pub const PerfParams = struct {
+    cwd: ?[]const u8 = null,
+    // Use string literals for format to avoid memory leaks
+    format: []const u8 = "text",
+    threshold: i64 = 5000,
 };
 
 pub fn parse(allocator: std.mem.Allocator) !Action {
@@ -48,6 +56,8 @@ pub fn parse(allocator: std.mem.Allocator) !Action {
         return .fzf;
     } else if (std.mem.eql(u8, command, "recalc-rank")) {
         return .recalc_rank;
+    } else if (std.mem.eql(u8, command, "perf")) {
+        return parsePerf(allocator, &iter);
     } else if (std.mem.eql(u8, command, "-h") or std.mem.eql(u8, command, "--help")) {
         return .help;
     }
@@ -118,6 +128,32 @@ fn parseImport(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !Ac
     return Action{
         .import = .{
             .file = file,
+        },
+    };
+}
+
+fn parsePerf(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !Action {
+    var cwd: ?[]const u8 = null;
+    // Use string literal for format to avoid memory leaks
+    var format_str: ?[]const u8 = null;
+    var threshold: i64 = 5000;
+
+    while (iter.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--cwd") or std.mem.eql(u8, arg, "-c")) {
+            cwd = if (iter.next()) |val| try allocator.dupe(u8, val) else return error.MissingArgValue;
+        } else if (std.mem.eql(u8, arg, "--format") or std.mem.eql(u8, arg, "-f")) {
+            format_str = if (iter.next()) |val| try allocator.dupe(u8, val) else return error.MissingArgValue;
+        } else if (std.mem.eql(u8, arg, "--threshold") or std.mem.eql(u8, arg, "-t")) {
+            const val = iter.next() orelse return error.MissingArgValue;
+            threshold = try std.fmt.parseInt(i64, val, 10);
+        }
+    }
+
+    return Action{
+        .perf = .{
+            .cwd = cwd,
+            .format = format_str orelse "text",
+            .threshold = threshold,
         },
     };
 }

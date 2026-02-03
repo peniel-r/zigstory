@@ -20,6 +20,7 @@ pub fn printHelp() void {
         \\    import      Import existing PowerShell history
         \\    list        List recent commands
         \\    stats       Display history statistics
+        \\    perf        Display performance metrics for directory
         \\    recalc-rank Recalculate frecency ranks for all commands
         \\    help        Display this help message
         \\
@@ -109,6 +110,28 @@ pub fn printHelp() void {
         \\    EXAMPLE:
         \\      zigstory list            # Show last 5 commands
         \\      zigstory list 20         # Show last 20 commands
+        \\
+        \\-------------------------------------------------------------------------------
+        \\
+        \\  zigstory perf [OPTIONS]
+        \\    Display performance metrics for the current directory.
+        \\
+        \\    OPTIONS:
+        \\      -c, --cwd <PATH>         Working directory (default: current)
+        \\      -f, --format <text|json> Output format (default: text)
+        \\      -t, --threshold <MS>     Warning threshold in ms (default: 5000)
+        \\
+        \\    FEATURES:
+        \\      * Average command duration
+        \\      * Last command duration with warning if slow
+        \\      * Success rate (shown if < 100%)
+        \\      * Total commands in directory
+        \\
+        \\    EXAMPLE:
+        \\      zigstory perf            # Show performance for current directory
+        \\      zigstory perf --cwd /path/to/project
+        \\      zigstory perf --format json
+        \\      zigstory perf --threshold 3000
         \\
         \\-------------------------------------------------------------------------------
         \\
@@ -231,6 +254,8 @@ pub fn printCommandHelp(command: []const u8) void {
         printListHelp();
     } else if (std.mem.eql(u8, command, "stats")) {
         printStatsHelp();
+    } else if (std.mem.eql(u8, command, "perf")) {
+        printPerfHelp();
     } else if (std.mem.eql(u8, command, "recalc-rank")) {
         printRecalcRankHelp();
     } else {
@@ -445,7 +470,74 @@ fn printRecalcRankHelp() void {
         \\      • Completes in <1s for 10,000 entries
         \\
         \\EXAMPLES:
-        \\      zigstory recalc-rank
+        \\    zigstory recalc-rank
+        \\
+        \\
+    ;
+    std.debug.print("{s}", .{help_text});
+}
+
+fn printPerfHelp() void {
+    const help_text =
+        \\
+        \\zigstory perf - Display performance metrics
+        \\
+        \\USAGE:
+        \\    zigstory perf [OPTIONS]
+        \\
+        \\OPTIONS:
+        \\    -c, --cwd <PATH>         Working directory (default: current)
+        \\    -f, --format <text|json> Output format (default: text)
+        \\    -t, --threshold <MS>     Warning threshold in ms (default: 5000)
+        \\
+        \\DESCRIPTION:
+        \\      Displays performance metrics for commands executed in the specified
+        \\      directory. Useful for identifying slow commands and monitoring
+        \\      command execution patterns.
+        \\
+        \\METRICS:
+        \\      • Average command duration
+        \\      • Last command duration with warning if slow
+        \\      • Success rate (shown if < 100%)
+        \\      • Total commands in directory
+        \\
+        \\OUTPUT (text format):
+        \\      Displays human-readable duration with warnings:
+        \\      - [⚠️] warning if last command exceeds threshold
+        \\      - [✅] success rate indicator if < 100%
+        \\
+        \\OUTPUT (json format):
+        \\      Returns JSON with all metrics for custom processing:
+        \\      {
+        \\        "avg_duration_ms": 1250.5,
+        \\        "last_duration_ms": 3420,
+        \\        "last_cmd": "npm test",
+        \\        "success_rate": 95.2,
+        \\        "total_commands": 847,
+        \\        "last_exit_code": 0
+        \\      }
+        \\
+        \\STARSHIP INTEGRATION:
+        \\      Add to starship.toml for prompt integration:
+        \\
+        \\      [custom.zigstory_perf]
+        \\      description = "Zigstory performance metrics"
+        \\      symbol = "⚡"
+        \\      when = "if (Test-Path ~/.zigstory/history.db) { $true }"
+        \\      shell = ["pwsh", "-NoProfile", "-Command"]
+        \\      format = "via [$symbol$output]($style)"
+        \\      command = "zigstory perf --format text"
+        \\
+        \\EXAMPLES:
+        \\    zigstory perf                          # Current directory
+        \\    zigstory perf --cwd /path/to/project    # Specific directory
+        \\    zigstory perf --format json            # JSON output
+        \\    zigstory perf --threshold 3000          # Custom threshold
+        \\
+        \\EXAMPLE OUTPUT:
+        \\    1.2s avg [⚠️ last: 5420ms] [✅ 94.5%]
+        \\    2.3s avg
+        \\    850ms avg [✅ 92.3%]
         \\
         \\
     ;

@@ -12,6 +12,7 @@ const help = @import("cli/help.zig");
 const stats = @import("cli/stats.zig");
 const ranking = zigstory.ranking;
 const recalc = @import("cli/recalc.zig");
+const perf = @import("cli/perf.zig");
 
 // Use libvaxis panic handler for proper terminal cleanup
 pub const panic = vaxis.panic_handler;
@@ -350,6 +351,46 @@ pub fn main() !void {
                 .verbose = true,
             }, allocator) catch |err| {
                 std.debug.print("Error recalculating ranks: {}\n", .{err});
+                std.process.exit(1);
+            };
+        },
+        .perf => |params| {
+            // Get or create default database path
+            const home_dir = std.process.getEnvVarOwned(allocator, "USERPROFILE") catch |err| blk: {
+                if (err == error.EnvironmentVariableNotFound) {
+                    break :blk std.process.getEnvVarOwned(allocator, "HOME") catch {
+                        std.debug.print("Error: Could not determine home directory\n", .{});
+                        std.process.exit(1);
+                    };
+                }
+                std.debug.print("Error getting home directory: {}\n", .{err});
+                std.process.exit(1);
+            };
+            defer allocator.free(home_dir);
+
+            const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
+            defer allocator.free(db_path);
+
+            // Ensure directory exists
+            const db_dir = std.fs.path.dirname(db_path) orelse ".";
+            std.fs.cwd().makePath(db_dir) catch |err| {
+                std.debug.print("Error creating database directory: {}\n", .{err});
+                std.process.exit(1);
+            };
+
+            const db_path_z = try allocator.dupeZ(u8, db_path);
+            defer allocator.free(db_path_z);
+
+            // Initialize database
+            var db = zigstory.db.initDb(db_path_z) catch |err| {
+                std.debug.print("Error initializing database: {}\n", .{err});
+                std.process.exit(1);
+            };
+            defer db.deinit();
+
+            // Run perf command with individual parameters
+            perf.run(&db, params.cwd, params.format, params.threshold, allocator) catch |err| {
+                std.debug.print("Error running perf: {}\n", .{err});
                 std.process.exit(1);
             };
         },
