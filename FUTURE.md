@@ -1,8 +1,112 @@
-# Future Improvements: Starship Prompt Engine Integration
+# Future Improvements & Roadmap
 
-> **Status**: Ideas Collection | **Created**: February 2, 2026 | **Last Updated**: February 2, 2026
+> **Status**: Ideas Collection | **Last Updated**: February 2, 2026
 
-This document outlines potential integrations between **zigstory** (PowerShell history manager) and **Starship** (cross-shell prompt) to enhance the shell experience with intelligent command history and context-aware prompts.
+This document outlines potential future features, integrations, and architectural improvements for **zigstory**.
+
+---
+
+## 1. DevOps & Automation
+
+Establishing robust CI/CD is critical for a cross-platform tool involving multiple languages (Zig, C#, PowerShell).
+
+### Unified Release Pipeline
+- **Goal**: Automate cross-platform builds and releases.
+- **Implementation**: GitHub Actions workflow.
+  - Install Zig and .NET SDKs.
+  - Build Zig CLI (`zig build -Doptimize=ReleaseFast`).
+  - Build C# Predictor (`dotnet publish`).
+  - Package artifacts (`.zip` for Windows, `.tar.gz` for Linux/macOS).
+  - Draft GitHub Release with semantic versioning.
+
+### Performance Regression Gating
+- **Goal**: Maintain sub-5ms latency.
+- **Implementation**:
+  - Run `tests/benchmark.zig` in CI.
+  - Fail PR if latency exceeds thresholds (e.g., >10ms for search).
+
+### Cross-Platform Verification
+- **Goal**: Ensure reliability across OSs.
+- **Implementation**: Matrix testing for PowerShell Core on Ubuntu/macOS alongside Windows.
+
+---
+
+## 2. Security & Compliance
+
+Ensure data hygiene and security for sensitive command history.
+
+### Active Secret Redaction
+- **Goal**: Prevent logging sensitive credentials to disk.
+- **Implementation**: "Pre-write" sanitizer in `src/db/write.zig`.
+  - Use regex to detect keys (AWS, API tokens, private keys).
+  - Redact to `REDACTED_SECRET` before SQL insertion.
+
+### At-Rest Encryption
+- **Goal**: Protect history database if file is exfiltrated.
+- **Implementation**:
+  - Migration to SQLCipher.
+  - Or Zig-native ChaCha20 encryption for specific columns (`cmd`, `cwd`).
+
+---
+
+## 3. Advanced Intelligence (AI)
+
+Elevate the current "Frecency" (Frequency + Recency) model with local AI.
+
+### Local LLM Integration
+- **Goal**: Natural language command suggestions.
+- **Implementation**: `zigstory suggest "<intent>"`
+  - Connect to local Ollama instance (codellama, mistral).
+  - Example: "undo last commit" -> `git reset --soft HEAD~1`.
+
+### Workflow Graphing
+- **Goal**: Predict sequences of commands.
+- **Implementation**:
+  - Analyze `session_id` sequences.
+  - Build Markov chain or simple graph.
+  - Suggest next logical command (e.g., `git push` after `git commit`).
+
+---
+
+## 4. Deep Shell Integrations
+
+### Terminal Multiplexer Context (Tmux / Zellij)
+- **Goal**: Context-aware history per session/pane.
+- **Implementation**:
+  - Capture **Session Name** or **Window Title**.
+  - Store as new column in DB.
+  - Filter history by "Project Context" (e.g., Backend vs Frontend tabs).
+
+### SSH / Remote Aggregation
+- **Goal**: Unified history across servers.
+- **Implementation**:
+  - "Headless" agent mode for remote servers.
+  - Forward history back to local machine via secure channel.
+
+---
+
+## 5. TUI Power Features
+
+### Macro/Script Generator
+- **Goal**: Turn history into reusable scripts.
+- **Implementation**:
+  - Multi-select commands in TUI.
+  - Hotkey (e.g., `Ctrl+S`) to "Save as Script".
+  - Generate `.ps1` function and copy to clipboard.
+
+### "tldr" Preview Integration
+- **Goal**: Instant command documentation.
+- **Implementation**:
+  - Fetch `tldr` pages for selected command.
+  - Display in side panel/popup in TUI.
+
+---
+
+# Starship Prompt Engine Integration
+
+> **Status**: Ideas Collection | **Created**: February 2, 2026
+
+This section outlines potential integrations between **zigstory** (PowerShell history manager) and **Starship** (cross-shell prompt) to enhance the shell experience with intelligent command history and context-aware prompts.
 
 ---
 
@@ -293,7 +397,7 @@ command = '''
 
 ---
 
-## Implementation Roadmap
+## Implementation Roadmap (Starship Integration)
 
 ### Phase 1: Simple Integration (1-2 days)
 
@@ -452,63 +556,3 @@ command = '''
 - **Starship Documentation**: https://starship.rs/config/
 - **Zigstarship Project**: https://github.com/zigstarship/zigstarship (conceptual reference)
 - **PowerShell Prompt Customization**: https://docs.microsoft.com/en-us/powershell/module/psreadline/about/about_psreadline
-
----
-
-## Next Steps
-
-**Immediate (Week 1):**
-1. Evaluate Phase 1 implementation feasibility
-2. Create basic custom module for Starship
-3. Test with existing zigstory installation
-
-**Short-term (Month 1):**
-1. Implement Phase 2 features
-2. Create PowerShell integration hooks
-3. Document setup process
-
-**Long-term (Quarter 1):**
-1. Evaluate Rust module implementation
-2. Consider ML integration for predictions
-3. Gather user feedback and iterate
-
----
-
-## Changelog
-
-| Date | Version | Changes |
-|------|---------|---------|
-| 2026-02-02 | 1.0.0 | Initial documentation of Starship integration ideas |
-
----
-
-## Questions & Open Issues
-
-| Question | Priority | Status |
-|----------|----------|--------|
-| Should zigstory predictions be cached in memory? | Medium | Open |
-| What's the acceptable prompt render time threshold? | High | Open |
-| Should we support multiple shells beyond PowerShell? | Low | Open |
-| Should zigstory predict commands outside of git context? | Medium | Open |
-
----
-
-## Contributing
-
-If you want to implement any of these improvements:
-
-1. **Pick an integration** from the list above
-2. **Create an issue** to track your progress
-3. **Follow the roadmap** for your chosen phase
-4. **Document your changes** in this file
-5. **Add tests** for your implementation
-
----
-
-## License
-
-This integration documentation follows the same license as the zigstory project.
-
----
-
-*Last updated: February 2, 2026*

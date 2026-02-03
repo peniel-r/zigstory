@@ -1,4 +1,4 @@
-# zigstory
+# Zigstory
 
 > **High-Performance Shell History Manager with AI-Powered Predictions**
 
