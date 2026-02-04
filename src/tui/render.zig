@@ -297,6 +297,8 @@ pub fn renderStatusBar(
     result_count: usize,
     selections_count: usize,
     filter_mode: ?[]const u8,
+    command_mode: bool,
+    command_buffer: []const u8,
 ) !void {
     const bar_style = vaxis.Style{
         .fg = colors.fg_dimmed,
@@ -313,7 +315,17 @@ pub fn renderStatusBar(
         .bold = true,
     };
 
-    if (is_searching) {
+    const command_style = vaxis.Style{
+        .fg = colors.fg_highlight,
+        .bg = colors.bg_primary,
+        .bold = true,
+    };
+
+    if (command_mode) {
+        status_text = std.fmt.bufPrint(&status_buf, " :{s}", .{
+            command_buffer,
+        }) catch " : ";
+    } else if (is_searching) {
         status_text = std.fmt.bufPrint(&status_buf, " Search: {s}| ({d} results) {s} | [FILTER: {s}]", .{
             query,
             result_count,
@@ -332,7 +344,8 @@ pub fn renderStatusBar(
 
     // Duplicate status_text to ensure it survives the frame
     const status_safe = try allocator.dupe(u8, status_text);
-    _ = win.printSegment(.{ .text = status_safe, .style = search_style }, .{ .row_offset = 1, .col_offset = 0 });
+    const style = if (command_mode) command_style else search_style;
+    _ = win.printSegment(.{ .text = status_safe, .style = style }, .{ .row_offset = 1, .col_offset = 0 });
 }
 
 pub fn renderHelpBar(win: vaxis.Window) void {
@@ -357,7 +370,8 @@ pub fn renderHelpBar(win: vaxis.Window) void {
     const keybinds = [_]struct { key: []const u8, desc: []const u8 }{
         .{ .key = "↑/↓", .desc = " Nav  " },
         .{ .key = "Enter", .desc = " Select&Copy  " },
-        .{ .key = "Esc", .desc = " Exit  " },
+        .{ .key = "S+Space", .desc = " Toggle Sel " },
+        .{ .key = ":q", .desc = " Exit  " },
         .{ .key = "PgUp/Dn", .desc = " Page  " },
         .{ .key = "Home/End", .desc = " Jump  " },
         .{ .key = "Ctrl+U", .desc = " Clear  " },

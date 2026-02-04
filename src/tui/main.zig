@@ -46,6 +46,10 @@ const TuiApp = struct {
 
     selected_index: usize = 0,
 
+    // Vim-like command mode
+    command_mode: bool = false,
+    command_buffer: std.ArrayListUnmanaged(u8) = .{},
+
     /// Initialize TUI application
     pub fn init(allocator: std.mem.Allocator, db: *sqlite.Db, current_dir: ?[]const u8) !TuiApp {
         var buffer: [1024]u8 = undefined;
@@ -174,8 +178,51 @@ const TuiApp = struct {
     fn handleEvent(self: *TuiApp, event: Event) !void {
         switch (event) {
             .key_press => |key| {
-                // Toggles selection with Space
-                if (key.matches(' ', .{})) {
+                // Handle command mode (vim-like ':q')
+                if (key.matches(':', .{})) {
+                    self.command_mode = true;
+                    self.command_buffer.clearRetainingCapacity();
+                    return;
+                }
+
+                // If in command mode, handle command input
+                if (self.command_mode) {
+                    // Escape: Exit command mode
+                    if (key.matches(vaxis.Key.escape, .{})) {
+                        self.command_mode = false;
+                        self.command_buffer.clearRetainingCapacity();
+                        return;
+                    }
+
+                    // Enter: Execute command
+                    if (key.matches(vaxis.Key.enter, .{})) {
+                        if (std.mem.eql(u8, self.command_buffer.items, "q")) {
+                            self.should_quit = true;
+                        }
+                        self.command_mode = false;
+                        self.command_buffer.clearRetainingCapacity();
+                        return;
+                    }
+
+                    // Backspace: Remove last character
+                    if (key.matches(vaxis.Key.backspace, .{})) {
+                        if (self.command_buffer.items.len > 0) {
+                            _ = self.command_buffer.pop();
+                        }
+                        return;
+                    }
+
+                    // Add character to command buffer
+                    if (key.text) |text| {
+                        try self.command_buffer.appendSlice(self.allocator, text);
+                        return;
+                    }
+
+                    return; // Don't process other keys in command mode
+                }
+
+                // Toggles selection with Shift + Space
+                if (key.matches(' ', .{}) and key.mods.shift) {
                     const entry = try navigation.getSelectedCommandEntry(
                         self.search_state.results,
                         self.selected_index,
@@ -334,6 +381,7 @@ const TuiApp = struct {
         // Render status/search bar (row 1)
         const search_query = self.search_state.query.items;
         const filter_mode_str = self.search_state.filter_state.mode.toString();
+        const command_buf = self.command_buffer.items;
         try render.renderStatusBar(
             win,
             allocator,
@@ -344,6 +392,8 @@ const TuiApp = struct {
             self.search_state.results.len,
             self.selections.items.len,
             filter_mode_str,
+            self.command_mode,
+            command_buf,
         );
 
         // Draw entries starting at row 2
@@ -417,6 +467,7 @@ const TuiApp = struct {
             self.allocator.free(item.cwd);
         }
         self.selections.deinit(self.allocator);
+        self.command_buffer.deinit(self.allocator);
         self.vx.deinit(self.allocator, self.tty.writer());
         self.tty.deinit();
         self.* = undefined;
