@@ -94,10 +94,14 @@ pub fn addCommand(db: *sqlite.Db, params: AddParams, allocator: std.mem.Allocato
         try getHostname(allocator);
     defer allocator.free(hostname);
 
+    // Compute command hash before inserting
+    const cmd_hash = try ranking.getCommandHash(params.cmd, allocator);
+    defer allocator.free(cmd_hash);
+
     // Insert into database
     const query =
-        \\INSERT INTO history (cmd, cwd, exit_code, duration_ms, session_id, hostname)
-        \\VALUES (?, ?, ?, ?, ?, ?)
+        \\INSERT INTO history (cmd, cwd, exit_code, duration_ms, session_id, hostname, cmd_hash)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?)
     ;
 
     var stmt = try db.prepare(query);
@@ -110,6 +114,7 @@ pub fn addCommand(db: *sqlite.Db, params: AddParams, allocator: std.mem.Allocato
         .duration_ms = params.duration_ms,
         .session_id = session_id,
         .hostname = hostname,
+        .cmd_hash = cmd_hash,
     });
 
     // Update ranking stats
@@ -123,13 +128,11 @@ pub fn addCommand(db: *sqlite.Db, params: AddParams, allocator: std.mem.Allocato
 
     if (try iter.next(.{})) |row| {
         const history_id = row.id;
-        const cmd_hash = try ranking.getCommandHash(params.cmd, allocator);
-        defer allocator.free(cmd_hash);
-
         const frecency_config = ranking.FrecencyConfig{};
+        const current_time = std.time.timestamp();
 
         // Update command stats (frequency, last_used)
-        try ranking.updateCommandStats(db, params.cmd, cmd_hash, std.time.timestamp());
+        try ranking.updateCommandStats(db, params.cmd, cmd_hash, current_time);
 
         // Calculate and update rank for this entry
         try ranking.updateHistoryRank(db, history_id, cmd_hash, frecency_config);

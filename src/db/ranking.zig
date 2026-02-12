@@ -59,6 +59,13 @@ pub fn createCommandStatsTable(db: *sqlite.Db) !void {
     , .{}, .{});
 }
 
+/// Add cmd_hash column to history table
+pub fn addCmdHashColumn(db: *sqlite.Db) !void {
+    try db.exec(
+        \\ALTER TABLE history ADD COLUMN cmd_hash TEXT;
+    , .{}, .{});
+}
+
 /// Add rank column to history table
 pub fn addRankColumn(db: *sqlite.Db) !void {
     try db.exec(
@@ -73,11 +80,106 @@ pub fn createRankIndex(db: *sqlite.Db) !void {
     , .{}, .{});
 }
 
+/// Create index on cmd_hash column
+pub fn createCmdHashIndex(db: *sqlite.Db) !void {
+    try db.exec(
+        \\CREATE INDEX IF NOT EXISTS idx_cmd_hash ON history(cmd_hash);
+    , .{}, .{});
+}
+
+/// Backfill cmd_hash for existing history entries that don't have it
+pub fn backfillCmdHashes(db: *sqlite.Db, allocator: std.mem.Allocator) !void {
+    // Check if backfill is needed
+    var count_stmt = try db.prepare("SELECT COUNT(*) as count FROM history WHERE cmd_hash IS NULL");
+    defer count_stmt.deinit();
+
+    const CountResult = struct { count: i64 };
+    var iter = try count_stmt.iterator(CountResult, .{});
+    const null_count = (try iter.next(.{})).?.count;
+
+    std.debug.print("Found {} entries without cmd_hash\n", .{null_count});
+
+    if (null_count == 0) {
+        // No backfill needed
+        std.debug.print("No backfill needed - all entries have cmd_hash\n", .{});
+        return;
+    }
+
+    std.debug.print("Backfilling cmd_hash for {} existing entries...\n", .{null_count});
+
+    // Get all entries without cmd_hash
+    const query = "SELECT id, cmd FROM history WHERE cmd_hash IS NULL";
+    var stmt = try db.prepare(query);
+    defer stmt.deinit();
+
+    const EntryResult = struct { id: i64, cmd: []const u8 };
+    var result_iter = try stmt.iterator(EntryResult, .{});
+
+    // Begin transaction
+    var begin_stmt = try db.prepare("BEGIN TRANSACTION");
+    defer begin_stmt.deinit();
+    try begin_stmt.exec(.{}, .{});
+
+    errdefer {
+        var rollback_stmt = db.prepare("ROLLBACK") catch unreachable;
+        defer rollback_stmt.deinit();
+        rollback_stmt.exec(.{}, .{}) catch {};
+    }
+
+    // Update each entry with cmd_hash
+    const update_query =
+        \\UPDATE history
+        \\SET cmd_hash = ?
+        \\WHERE id = ?
+    ;
+    var update_stmt = try db.prepare(update_query);
+    defer update_stmt.deinit();
+
+    var processed: usize = 0;
+    while (true) {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+
+        const row = (try result_iter.nextAlloc(arena.allocator(), .{})) orelse break;
+
+        const cmd_hash = try getCommandHash(row.cmd, arena.allocator());
+
+        try update_stmt.exec(.{}, .{
+            .cmd_hash = cmd_hash,
+            .id = row.id,
+        });
+        update_stmt.reset();
+
+        processed += 1;
+
+        if (processed % 1000 == 0) {
+            std.debug.print("\rBackfilled {} entries...", .{processed});
+        }
+    }
+
+    std.debug.print("\rBackfilled {} entries.\n", .{processed});
+
+    // Commit transaction
+    {
+        var commit_stmt = try db.prepare("COMMIT");
+        defer commit_stmt.deinit();
+        try commit_stmt.exec(.{}, .{});
+    }
+
+    std.debug.print("Backfill completed successfully!\n", .{});
+}
+
 /// Initialize ranking tables and columns
 pub fn initRanking(db: *sqlite.Db) !void {
     // Create command_stats table
     createCommandStatsTable(db) catch |err| {
         // Ignore error if table already exists
+        if (err != error.SQLiteError) return err;
+    };
+
+    // Add cmd_hash column to history table
+    addCmdHashColumn(db) catch |err| {
+        // Ignore error if column already exists
         if (err != error.SQLiteError) return err;
     };
 
@@ -92,6 +194,15 @@ pub fn initRanking(db: *sqlite.Db) !void {
         // Ignore error if index already exists
         if (err != error.SQLiteError) return err;
     };
+
+    // Create index on cmd_hash
+    createCmdHashIndex(db) catch |err| {
+        // Ignore error if index already exists
+        if (err != error.SQLiteError) return err;
+    };
+
+    // Note: backfillCmdHashes is not called here to avoid circular dependency issues
+    // It should be called from the main initialization if needed
 }
 
 /// Update command frequency and recency stats when a command is executed
@@ -172,16 +283,14 @@ pub fn recalculateAllRanks(
 
     // Update in batches
     const update_query =
-        \\UPDATE history h
+        \\UPDATE history
         \\SET rank = (
         \\    SELECT COALESCE(
         \\        (s.frequency * ?) + (? / MAX(1, (? - s.last_used) / 86400.0)),
         \\        0
         \\    )
         \\    FROM command_stats s
-        \\    WHERE s.cmd_hash = (
-        \\        SELECT sub.cmd_hash FROM history sub WHERE sub.id = h.id
-        \\    )
+        \\    WHERE s.cmd_hash = history.cmd_hash
         \\)
         \\WHERE id BETWEEN ? AND ?;
     ;

@@ -42,6 +42,14 @@ pub fn recalcRanks(params: RecalcParams, allocator: std.mem.Allocator) !void {
     // Populate command_stats table from existing history
     try populateCommandStats(&db, allocator, params.verbose);
 
+    // Backfill cmd_hash for existing entries if needed
+    std.debug.print("\nAbout to call backfillCmdHashes...\n", .{});
+    if (params.verbose) {
+        std.debug.print("Checking for missing cmd_hash values...\n", .{});
+    }
+    try ranking.backfillCmdHashes(&db, allocator);
+    std.debug.print("BackfillCmdHashes completed.\n", .{});
+
     if (params.verbose) {
         std.debug.print("\nRecalculating ranks for all history entries...\n", .{});
     }

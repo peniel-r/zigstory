@@ -1,5 +1,7 @@
 const std = @import("std");
 const sqlite = @import("sqlite");
+const zigstory = @import("zigstory");
+const ranking = zigstory.ranking;
 
 /// Represents a parsed history entry
 const HistoryEntry = struct {
@@ -214,8 +216,8 @@ pub fn importFromFile(
     }
 
     const query =
-        \\INSERT INTO history (cmd, cwd, exit_code, duration_ms, session_id, hostname, timestamp)
-        \\VALUES (?, ?, ?, ?, ?, ?, ?)
+        \\INSERT INTO history (cmd, cwd, exit_code, duration_ms, session_id, hostname, timestamp, cmd_hash)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ;
 
     var stmt = try db.prepare(query);
@@ -244,6 +246,10 @@ pub fn importFromFile(
         const duration_ms_obj = obj.get("duration_ms");
         const duration_ms = if (duration_ms_obj) |d| (if (d == .integer) @as(i64, @intCast(d.integer)) else 0) else 0;
 
+        // Compute command hash
+        const cmd_hash = try ranking.getCommandHash(cmd_str, allocator);
+        defer allocator.free(cmd_hash);
+
         // Insert into database
         try stmt.exec(.{}, .{
             .cmd = cmd_str,
@@ -253,6 +259,7 @@ pub fn importFromFile(
             .session_id = session_id,
             .hostname = hostname,
             .timestamp = timestamp,
+            .cmd_hash = cmd_hash,
         });
         stmt.reset();
         imported += 1;
@@ -310,8 +317,8 @@ pub fn importHistory(
 
     // Use batch insertion for better performance
     const query =
-        \\INSERT INTO history (cmd, cwd, exit_code, duration_ms, session_id, hostname, timestamp)
-        \\VALUES (?, ?, ?, ?, ?, ?, ?)
+        \\INSERT INTO history (cmd, cwd, exit_code, duration_ms, session_id, hostname, timestamp, cmd_hash)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ;
 
     var stmt = try db.prepare(query);
@@ -337,6 +344,10 @@ pub fn importHistory(
         if (try isDuplicate(db, entry.cmd, cwd, entry.timestamp)) {
             skipped += 1;
         } else {
+            // Compute command hash
+            const cmd_hash = try ranking.getCommandHash(entry.cmd, allocator);
+            defer allocator.free(cmd_hash);
+
             // Insert entry
             try stmt.exec(.{}, .{
                 .cmd = entry.cmd,
@@ -346,6 +357,7 @@ pub fn importHistory(
                 .session_id = session_id,
                 .hostname = hostname,
                 .timestamp = entry.timestamp,
+                .cmd_hash = cmd_hash,
             });
             stmt.reset(); // Reset statement for next use
             imported += 1;
