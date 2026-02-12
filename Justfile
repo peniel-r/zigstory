@@ -39,6 +39,10 @@ clean:
     @echo "Cleaning plugin artifacts..."
     @rm -rf src/predictor/bin src/predictor/obj
 
+# Push with SSH key
+push:
+    @set GIT_SSH_COMMAND=ssh -i %USERPROFILE%\.ssh\gitlab -o IdentitiesOnly=yes && git push
+
 # Default recipe (show help)
 default:
     @just --list
