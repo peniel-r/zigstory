@@ -41,7 +41,7 @@ clean:
 
 # Push with SSH key
 push:
-    @set GIT_SSH_COMMAND=ssh -i %USERPROFILE%\.ssh\gitlab -o IdentitiesOnly=yes && git push
+    @set GIT_SSH_COMMAND=ssh -i C:/Users/mfweax/.ssh/gitlab -o IdentitiesOnly=yes && git push
 
 # Default recipe (show help)
 default:
