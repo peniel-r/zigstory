@@ -39,7 +39,10 @@ pub fn build(b: *std.Build) void {
     // Zig 0.16: Build.Step.Compile no longer exposes linkLibC().
     // Linking libc is handled via module/executable options or dependency modules.
     if (target.result.os.tag == .windows) {
-        exe.linkSystemLibrary("user32");
+        // Zig 0.16: link system libraries at the Module level.
+        // The executable's root_module is a *std.Build.Module so call the
+        // Module API to add a system library.
+        exe.root_module.linkSystemLibrary("user32", .{});
     }
 
     b.installArtifact(exe);

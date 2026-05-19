@@ -30,10 +30,10 @@ fn validatePath(cwd: []const u8) !void {
 }
 
 /// Generates a UUID v4 session ID
-pub fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
-    var random = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
-    const rand = random.random();
-
+pub fn generateSessionId(allocator: std.mem.Allocator, io: std.Io) ![]const u8 {
+    // std.crypto.random removed in Zig 0.16; use io.random() via std.Random.IoSource.
+    var src = std.Random.IoSource{ .io = io };
+    const rand = src.interface();
     var uuid: [36]u8 = undefined;
     var buf: [16]u8 = undefined;
     rand.bytes(&buf);
@@ -54,28 +54,27 @@ pub fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
 
 /// Gets the system hostname
 pub fn getHostname(allocator: std.mem.Allocator) ![]const u8 {
-    // Try environment variables first (works on both Windows and Unix)
-    if (std.process.getEnvVarOwned(allocator, "COMPUTERNAME")) |name| {
-        return name;
-    } else |_| {
-        if (std.process.getEnvVarOwned(allocator, "HOSTNAME")) |name| {
-            return name;
-        } else |_| {
-            // On Unix systems, try gethostname
-            if (@import("builtin").os.tag != .windows) {
-                var buffer: [256]u8 = undefined;
-                const result = std.posix.gethostname(&buffer) catch {
-                    return try allocator.dupe(u8, "unknown");
-                };
-                return try allocator.dupe(u8, result);
-            }
-            return try allocator.dupe(u8, "unknown");
-        }
+    // Use std.c.getenv for cross-platform env access (works with libc).
+    // std.process.getEnvVarOwned was removed in Zig 0.16.
+    if (std.c.getenv("COMPUTERNAME")) |name| {
+        return try allocator.dupe(u8, std.mem.sliceTo(name, 0));
     }
+    if (std.c.getenv("HOSTNAME")) |name| {
+        return try allocator.dupe(u8, std.mem.sliceTo(name, 0));
+    }
+    // On Unix systems, try gethostname
+    if (@import("builtin").os.tag != .windows) {
+        var buffer: [256]u8 = undefined;
+        const result = std.posix.gethostname(&buffer) catch {
+            return try allocator.dupe(u8, "unknown");
+        };
+        return try allocator.dupe(u8, result);
+    }
+    return try allocator.dupe(u8, "unknown");
 }
 
 /// Adds a command to the history database
-pub fn addCommand(db: *sqlite.Db, params: AddParams, allocator: std.mem.Allocator) !void {
+pub fn addCommand(db: *sqlite.Db, params: AddParams, allocator: std.mem.Allocator, io: std.Io) !void {
     // Validate inputs
     try validateCommand(params.cmd);
     try validatePath(params.cwd);
@@ -84,7 +83,7 @@ pub fn addCommand(db: *sqlite.Db, params: AddParams, allocator: std.mem.Allocato
     const session_id = if (params.session_id) |sid|
         try allocator.dupe(u8, sid)
     else
-        try generateSessionId(allocator);
+        try generateSessionId(allocator, io);
     defer allocator.free(session_id);
 
     // Get hostname if not provided
@@ -129,12 +128,13 @@ pub fn addCommand(db: *sqlite.Db, params: AddParams, allocator: std.mem.Allocato
     if (try iter.next(.{})) |row| {
         const history_id = row.id;
         const frecency_config = ranking.FrecencyConfig{};
-        const current_time = std.time.timestamp();
+        // std.time.timestamp() removed in Zig 0.16 – use Io.Timestamp.
+        const current_time = std.Io.Timestamp.now(io, .real).toSeconds();
 
         // Update command stats (frequency, last_used)
         try ranking.updateCommandStats(db, params.cmd, cmd_hash, current_time);
 
         // Calculate and update rank for this entry
-        try ranking.updateHistoryRank(db, history_id, cmd_hash, frecency_config);
+        try ranking.updateHistoryRank(db, history_id, cmd_hash, frecency_config, io);
     }
 }

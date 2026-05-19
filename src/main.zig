@@ -17,12 +17,18 @@ const perf = @import("cli/perf.zig");
 // Use libvaxis panic handler for proper terminal cleanup
 pub const panic = vaxis.panic_handler;
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+/// Helper: get home directory from environ_map (USERPROFILE on Windows, HOME on Unix).
+/// Returns a borrowed slice – do NOT free it.
+fn getHomeDir(environ_map: *std.process.Environ.Map) ?[]const u8 {
+    return environ_map.get("USERPROFILE") orelse environ_map.get("HOME");
+}
 
-    const action = zigstory.cli.parse(allocator) catch |err| {
+pub fn main(init: std.process.Init) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const action = zigstory.cli.parse(allocator, init.minimal.args) catch |err| {
         std.debug.print("Error parsing arguments: {}\n", .{err});
         std.process.exit(1);
     };
@@ -34,25 +40,17 @@ pub fn main() !void {
                 allocator.free(args.cwd);
             }
 
-            // Get or create default database path
-            const home_dir = std.process.getEnvVarOwned(allocator, "USERPROFILE") catch |err| blk: {
-                if (err == error.EnvironmentVariableNotFound) {
-                    break :blk std.process.getEnvVarOwned(allocator, "HOME") catch {
-                        std.debug.print("Error: Could not determine home directory\n", .{});
-                        std.process.exit(1);
-                    };
-                }
-                std.debug.print("Error getting home directory: {}\n", .{err});
+            const home_dir = getHomeDir(init.environ_map) orelse {
+                std.debug.print("Error: Could not determine home directory\n", .{});
                 std.process.exit(1);
             };
-            defer allocator.free(home_dir);
 
             const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
             defer allocator.free(db_path);
 
             // Ensure directory exists
             const db_dir = std.fs.path.dirname(db_path) orelse ".";
-            std.fs.cwd().makePath(db_dir) catch |err| {
+            std.Io.Dir.cwd().createDirPath(init.io, db_dir) catch |err| {
                 std.debug.print("Error creating database directory: {}\n", .{err});
                 std.process.exit(1);
             };
@@ -73,7 +71,7 @@ pub fn main() !void {
                 .cwd = args.cwd,
                 .exit_code = args.exit_code,
                 .duration_ms = args.duration,
-            }, allocator) catch |err| {
+            }, allocator, init.io) catch |err| {
                 std.debug.print("Error adding command: {}\n", .{err});
                 std.process.exit(1);
             };
@@ -81,25 +79,17 @@ pub fn main() !void {
             std.debug.print("Command added successfully\n", .{});
         },
         .search => {
-            // Get or create default database path
-            const home_dir = std.process.getEnvVarOwned(allocator, "USERPROFILE") catch |err| blk: {
-                if (err == error.EnvironmentVariableNotFound) {
-                    break :blk std.process.getEnvVarOwned(allocator, "HOME") catch {
-                        std.debug.print("Error: Could not determine home directory\n", .{});
-                        std.process.exit(1);
-                    };
-                }
-                std.debug.print("Error getting home directory: {}\n", .{err});
+            const home_dir = getHomeDir(init.environ_map) orelse {
+                std.debug.print("Error: Could not determine home directory\n", .{});
                 std.process.exit(1);
             };
-            defer allocator.free(home_dir);
 
             const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
             defer allocator.free(db_path);
 
             // Ensure directory exists
             const db_dir = std.fs.path.dirname(db_path) orelse ".";
-            std.fs.cwd().makePath(db_dir) catch |err| {
+            std.Io.Dir.cwd().createDirPath(init.io, db_dir) catch |err| {
                 std.debug.print("Error creating database directory: {}\n", .{err});
                 std.process.exit(1);
             };
@@ -115,14 +105,14 @@ pub fn main() !void {
             defer db.deinit();
 
             // Get current working directory for filter
-            const cwd = std.process.getCwdAlloc(allocator) catch |err| {
+            const cwd = std.process.currentPathAlloc(init.io, allocator) catch |err| {
                 std.debug.print("Error getting current directory: {}\n", .{err});
                 std.process.exit(1);
             };
             defer allocator.free(cwd);
 
             // Launch TUI search interface
-            const result = tui.search(allocator, &db, cwd) catch |err| {
+            const result = tui.search(allocator, &db, cwd, init.io, init.environ_map) catch |err| {
                 std.debug.print("Error launching TUI: {}\n", .{err});
                 std.process.exit(1);
             };
@@ -137,25 +127,17 @@ pub fn main() !void {
             }
         },
         .import => |args| {
-            // Get or create default database path
-            const home_dir = std.process.getEnvVarOwned(allocator, "USERPROFILE") catch |err| blk: {
-                if (err == error.EnvironmentVariableNotFound) {
-                    break :blk std.process.getEnvVarOwned(allocator, "HOME") catch {
-                        std.debug.print("Error: Could not determine home directory\n", .{});
-                        std.process.exit(1);
-                    };
-                }
-                std.debug.print("Error getting home directory: {}\n", .{err});
+            const home_dir = getHomeDir(init.environ_map) orelse {
+                std.debug.print("Error: Could not determine home directory\n", .{});
                 std.process.exit(1);
             };
-            defer allocator.free(home_dir);
 
             const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
             defer allocator.free(db_path);
 
             // Ensure directory exists
             const db_dir = std.fs.path.dirname(db_path) orelse ".";
-            std.fs.cwd().makePath(db_dir) catch |err| {
+            std.Io.Dir.cwd().createDirPath(init.io, db_dir) catch |err| {
                 std.debug.print("Error creating database directory: {}\n", .{err});
                 std.process.exit(1);
             };
@@ -171,13 +153,13 @@ pub fn main() !void {
             defer db.deinit();
 
             // Get current working directory
-            const cwd_buffer = try std.process.getCwdAlloc(allocator);
+            const cwd_buffer = try std.process.currentPathAlloc(init.io, allocator);
             defer allocator.free(cwd_buffer);
 
             // Import from file if specified, otherwise import from PowerShell history
             if (args.file) |file_path| {
                 defer allocator.free(file_path);
-                const result = import_history.importFromFile(&db, file_path, cwd_buffer, allocator) catch |err| {
+                const result = import_history.importFromFile(&db, file_path, cwd_buffer, allocator, init.io) catch |err| {
                     std.debug.print("Error importing from file: {}\n", .{err});
                     std.process.exit(1);
                 };
@@ -185,7 +167,7 @@ pub fn main() !void {
                 std.debug.print("Total commands in file: {}\n", .{result.total});
                 std.debug.print("Imported: {}\n", .{result.imported});
             } else {
-                const result = import_history.importHistory(&db, cwd_buffer, allocator) catch |err| {
+                const result = import_history.importHistory(&db, cwd_buffer, allocator, init.io) catch |err| {
                     std.debug.print("Error importing history: {}\n", .{err});
                     std.process.exit(1);
                 };
@@ -196,18 +178,10 @@ pub fn main() !void {
             }
         },
         .stats => {
-            // Get or create default database path
-            const home_dir = std.process.getEnvVarOwned(allocator, "USERPROFILE") catch |err| blk: {
-                if (err == error.EnvironmentVariableNotFound) {
-                    break :blk std.process.getEnvVarOwned(allocator, "HOME") catch {
-                        std.debug.print("Error: Could not determine home directory: {}\n", .{err});
-                        std.process.exit(1);
-                    };
-                }
-                std.debug.print("Error getting home directory: {}\n", .{err});
+            const home_dir = getHomeDir(init.environ_map) orelse {
+                std.debug.print("Error: Could not determine home directory\n", .{});
                 std.process.exit(1);
             };
-            defer allocator.free(home_dir);
 
             const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
             defer allocator.free(db_path);
@@ -222,31 +196,23 @@ pub fn main() !void {
             };
             defer db.deinit();
 
-            stats.run(&db, allocator) catch |err| {
+            stats.run(&db, allocator, init.io) catch |err| {
                 std.debug.print("Error running stats: {}\n", .{err});
                 std.process.exit(1);
             };
         },
         .list => |args| {
-            // Get or create default database path
-            const home_dir = std.process.getEnvVarOwned(allocator, "USERPROFILE") catch |err| blk: {
-                if (err == error.EnvironmentVariableNotFound) {
-                    break :blk std.process.getEnvVarOwned(allocator, "HOME") catch {
-                        std.debug.print("Error: Could not determine home directory\n", .{});
-                        std.process.exit(1);
-                    };
-                }
-                std.debug.print("Error getting home directory: {}\n", .{err});
+            const home_dir = getHomeDir(init.environ_map) orelse {
+                std.debug.print("Error: Could not determine home directory\n", .{});
                 std.process.exit(1);
             };
-            defer allocator.free(home_dir);
 
             const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
             defer allocator.free(db_path);
 
             // Ensure directory exists
             const db_dir = std.fs.path.dirname(db_path) orelse ".";
-            std.fs.cwd().makePath(db_dir) catch |err| {
+            std.Io.Dir.cwd().createDirPath(init.io, db_dir) catch |err| {
                 std.debug.print("Error creating database directory: {}\n", .{err});
                 std.process.exit(1);
             };
@@ -268,25 +234,17 @@ pub fn main() !void {
             };
         },
         .fzf => {
-            // Get or create default database path
-            const home_dir = std.process.getEnvVarOwned(allocator, "USERPROFILE") catch |err| blk: {
-                if (err == error.EnvironmentVariableNotFound) {
-                    break :blk std.process.getEnvVarOwned(allocator, "HOME") catch {
-                        std.debug.print("Error: Could not determine home directory\n", .{});
-                        std.process.exit(1);
-                    };
-                }
-                std.debug.print("Error getting home directory: {}\n", .{err});
+            const home_dir = getHomeDir(init.environ_map) orelse {
+                std.debug.print("Error: Could not determine home directory\n", .{});
                 std.process.exit(1);
             };
-            defer allocator.free(home_dir);
 
             const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
             defer allocator.free(db_path);
 
             // Ensure directory exists
             const db_dir = std.fs.path.dirname(db_path) orelse ".";
-            std.fs.cwd().makePath(db_dir) catch |err| {
+            std.Io.Dir.cwd().createDirPath(init.io, db_dir) catch |err| {
                 std.debug.print("Error creating database directory: {}\n", .{err});
                 std.process.exit(1);
             };
@@ -302,15 +260,15 @@ pub fn main() !void {
             defer db.deinit();
 
             // Run fzf integration
-            const result = fzf_search.runFzf(&db, allocator) catch |err| {
+            const result = fzf_search.runFzf(&db, allocator, init.io) catch |err| {
                 std.debug.print("Error running fzf: {}\n", .{err});
                 std.process.exit(1);
             };
 
             if (result) |cmd| {
-                const stdout = std.fs.File.stdout();
-                stdout.writeAll(cmd) catch {};
-                stdout.writeAll("\n") catch {};
+                const stdout = std.Io.File.stdout();
+                stdout.writeStreamingAll(init.io, cmd) catch {};
+                stdout.writeStreamingAll(init.io, "\n") catch {};
                 // Copy to clipboard for easy PS integration
                 clipboard.copyToClipboard(allocator, cmd) catch |err| {
                     std.debug.print("Warning: Failed to copy to clipboard: {}\n", .{err});
@@ -319,25 +277,17 @@ pub fn main() !void {
             }
         },
         .recalc_rank => {
-            // Get or create default database path
-            const home_dir = std.process.getEnvVarOwned(allocator, "USERPROFILE") catch |err| blk: {
-                if (err == error.EnvironmentVariableNotFound) {
-                    break :blk std.process.getEnvVarOwned(allocator, "HOME") catch {
-                        std.debug.print("Error: Could not determine home directory\n", .{});
-                        std.process.exit(1);
-                    };
-                }
-                std.debug.print("Error getting home directory: {}\n", .{err});
+            const home_dir = getHomeDir(init.environ_map) orelse {
+                std.debug.print("Error: Could not determine home directory\n", .{});
                 std.process.exit(1);
             };
-            defer allocator.free(home_dir);
 
             const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
             defer allocator.free(db_path);
 
             // Ensure directory exists
             const db_dir = std.fs.path.dirname(db_path) orelse ".";
-            std.fs.cwd().makePath(db_dir) catch |err| {
+            std.Io.Dir.cwd().createDirPath(init.io, db_dir) catch |err| {
                 std.debug.print("Error creating database directory: {}\n", .{err});
                 std.process.exit(1);
             };
@@ -349,31 +299,23 @@ pub fn main() !void {
             recalc.recalcRanks(.{
                 .db_path = db_path_z,
                 .verbose = true,
-            }, allocator) catch |err| {
+            }, allocator, init.io) catch |err| {
                 std.debug.print("Error recalculating ranks: {}\n", .{err});
                 std.process.exit(1);
             };
         },
         .perf => |params| {
-            // Get or create default database path
-            const home_dir = std.process.getEnvVarOwned(allocator, "USERPROFILE") catch |err| blk: {
-                if (err == error.EnvironmentVariableNotFound) {
-                    break :blk std.process.getEnvVarOwned(allocator, "HOME") catch {
-                        std.debug.print("Error: Could not determine home directory\n", .{});
-                        std.process.exit(1);
-                    };
-                }
-                std.debug.print("Error getting home directory: {}\n", .{err});
+            const home_dir = getHomeDir(init.environ_map) orelse {
+                std.debug.print("Error: Could not determine home directory\n", .{});
                 std.process.exit(1);
             };
-            defer allocator.free(home_dir);
 
             const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
             defer allocator.free(db_path);
 
             // Ensure directory exists
             const db_dir = std.fs.path.dirname(db_path) orelse ".";
-            std.fs.cwd().makePath(db_dir) catch |err| {
+            std.Io.Dir.cwd().createDirPath(init.io, db_dir) catch |err| {
                 std.debug.print("Error creating database directory: {}\n", .{err});
                 std.process.exit(1);
             };
@@ -388,8 +330,8 @@ pub fn main() !void {
             };
             defer db.deinit();
 
-            // Run perf command with individual parameters
-            perf.run(&db, params.cwd, params.format, params.threshold, allocator) catch |err| {
+            // Run perf command with individual parameters (pass io for cwd resolution)
+            perf.run(&db, params.cwd, params.format, params.threshold, allocator, init.io) catch |err| {
                 std.debug.print("Error running perf: {}\n", .{err});
                 std.process.exit(1);
             };

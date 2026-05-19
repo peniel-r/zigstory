@@ -10,49 +10,49 @@ const HistoryEntry = struct {
 };
 
 /// Gets the PowerShell history file path
-fn getHistoryPath(allocator: std.mem.Allocator) ![]const u8 {
+fn getHistoryPath(allocator: std.mem.Allocator, io: std.Io) ![]const u8 {
+    // Use std.c.getenv – std.process.getEnvVarOwned was removed in Zig 0.16.
     // Try APPDATA path first
-    const appdata_result = std.process.getEnvVarOwned(allocator, "APPDATA");
-    if (appdata_result) |appdata| {
-        defer allocator.free(appdata);
+    if (std.c.getenv("APPDATA")) |appdata_c| {
+        const appdata = std.mem.sliceTo(appdata_c, 0);
         const path = try std.fs.path.join(allocator, &.{ appdata, "Microsoft", "Windows", "PowerShell", "PSReadline", "ConsoleHost_history.txt" });
 
         // Check if file exists
-        if (std.fs.cwd().openFile(path, .{})) |file| {
-            file.close();
+        if (std.Io.Dir.cwd().openFile(io, path, .{})) |file| {
+            file.close(io);
             return path;
         } else |_| {
             allocator.free(path);
         }
-    } else |_| {}
+    }
 
     // Try USERPROFILE path
-    const userprofile_result = std.process.getEnvVarOwned(allocator, "USERPROFILE");
-    if (userprofile_result) |userprofile| {
-        defer allocator.free(userprofile);
+    if (std.c.getenv("USERPROFILE")) |userprofile_c| {
+        const userprofile = std.mem.sliceTo(userprofile_c, 0);
         const path = try std.fs.path.join(allocator, &.{ userprofile, ".local", "share", "powershell", "PSReadline", "ConsoleHost_history.txt" });
 
         // Check if file exists
-        if (std.fs.cwd().openFile(path, .{})) |file| {
-            file.close();
+        if (std.Io.Dir.cwd().openFile(io, path, .{})) |file| {
+            file.close(io);
             return path;
         } else |_| {
             allocator.free(path);
         }
-    } else |_| {}
+    }
 
     return error.HistoryFileNotFound;
 }
 
 /// Parse PowerShell history file
 /// Returns a slice of HistoryEntry (caller must free each cmd and the slice itself)
-pub fn parseHistoryFile(allocator: std.mem.Allocator, file: *std.fs.File) !struct { entries: []HistoryEntry, count: usize } {
-    // Read entire file into memory
-    const file_size = try file.getEndPos();
+pub fn parseHistoryFile(allocator: std.mem.Allocator, io: std.Io, file: std.Io.File) !struct { entries: []HistoryEntry, count: usize } {
+    // Read entire file into memory.
+    // std.fs.File was removed in Zig 0.16; use std.Io.File.
+    const file_size = try file.length(io);
     const buffer = try allocator.alloc(u8, file_size);
     errdefer allocator.free(buffer);
 
-    const bytes_read = try file.readAll(buffer);
+    const bytes_read = try file.readPositionalAll(io, buffer, 0);
     if (bytes_read != file_size) {
         return error.ReadError;
     }
@@ -97,7 +97,7 @@ pub fn parseHistoryFile(allocator: std.mem.Allocator, file: *std.fs.File) !struc
 
     // Use a base timestamp (current time minus estimated history age)
     // We'll decrement by 60 seconds for each command to simulate realistic timestamps
-    const base_timestamp = std.time.timestamp();
+    const base_timestamp = std.Io.Timestamp.now(io, .real).toSeconds();
 
     for (buffer, 0..) |byte, i| {
         if (byte == newline or i == buffer.len - 1) {
@@ -165,19 +165,20 @@ pub fn importFromFile(
     file_path: []const u8,
     default_cwd: []const u8,
     allocator: std.mem.Allocator,
+    io: std.Io,
 ) !struct {
     total: usize,
     imported: usize,
 } {
-    // Read JSON file
-    var file = try std.fs.cwd().openFile(file_path, .{});
-    defer file.close();
+    // Read JSON file – std.fs.cwd() removed in Zig 0.16; use std.Io.Dir.cwd().
+    var file = try std.Io.Dir.cwd().openFile(io, file_path, .{});
+    defer file.close(io);
 
-    const file_size = try file.getEndPos();
+    const file_size = try file.length(io);
     const json_data = try allocator.alloc(u8, file_size);
     defer allocator.free(json_data);
 
-    const bytes_read = try file.readAll(json_data);
+    const bytes_read = try file.readPositionalAll(io, json_data, 0);
     if (bytes_read != file_size) {
         return error.ReadError;
     }
@@ -194,7 +195,7 @@ pub fn importFromFile(
 
     // Prepare session ID and hostname for all entries
     const add_mod = @import("add.zig");
-    const session_id = try add_mod.generateSessionId(allocator);
+    const session_id = try add_mod.generateSessionId(allocator, io);
     defer allocator.free(session_id);
 
     const hostname = try add_mod.getHostname(allocator);
@@ -223,7 +224,7 @@ pub fn importFromFile(
     var stmt = try db.prepare(query);
     defer stmt.deinit();
 
-    const timestamp = std.time.timestamp();
+    const timestamp = std.Io.Timestamp.now(io, .real).toSeconds();
 
     for (array.items) |item| {
         if (item != .object) {
@@ -284,13 +285,14 @@ pub fn importHistory(
     db: *sqlite.Db,
     cwd: []const u8,
     allocator: std.mem.Allocator,
+    io: std.Io,
 ) !struct {
     total: usize,
     imported: usize,
     skipped: usize,
 } {
     // Get history file path
-    const history_path = getHistoryPath(allocator) catch |err| {
+    const history_path = getHistoryPath(allocator, io) catch |err| {
         std.debug.print("Error finding PowerShell history file: {}\n", .{err});
         std.debug.print("Looking for history at:\n", .{});
         std.debug.print("  %%APPDATA%%\\Microsoft\\Windows\\PowerShell\\PSReadline\\ConsoleHost_history.txt\n", .{});
@@ -301,11 +303,11 @@ pub fn importHistory(
 
     std.debug.print("Reading history from: {s}\n", .{history_path});
 
-    // Open and parse history file
-    var file = try std.fs.cwd().openFile(history_path, .{});
-    defer file.close();
+    // Open and parse history file – std.fs.cwd() removed in Zig 0.16.
+    const file = try std.Io.Dir.cwd().openFile(io, history_path, .{});
+    defer file.close(io);
 
-    const parsed = try parseHistoryFile(allocator, &file);
+    const parsed = try parseHistoryFile(allocator, io, file);
     const entries = parsed.entries;
     const count = parsed.count;
 
@@ -327,13 +329,11 @@ pub fn importHistory(
     // Generate a single session ID for all imported commands
     const session_id = "imported-session";
 
-    // Get hostname
-    const hostname = std.process.getEnvVarOwned(allocator, "COMPUTERNAME") catch |err| blk: {
-        if (err == error.EnvironmentVariableNotFound) {
-            break :blk try allocator.dupe(u8, "unknown");
-        }
-        return err;
-    };
+    // Get hostname – std.process.getEnvVarOwned removed in Zig 0.16, use std.c.getenv.
+    const hostname = if (std.c.getenv("COMPUTERNAME")) |name|
+        try allocator.dupe(u8, std.mem.sliceTo(name, 0))
+    else
+        try allocator.dupe(u8, "unknown");
     defer allocator.free(hostname);
 
     // Display progress

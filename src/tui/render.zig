@@ -45,8 +45,7 @@ pub const default_config = ColumnConfig{};
 // Time Formatting
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub fn formatRelativeTime(timestamp: i64, buf: []u8) []const u8 {
-    const now: i64 = std.time.timestamp();
+pub fn formatRelativeTime(timestamp: i64, buf: []u8, now: i64) []const u8 {
     const diff = now - timestamp;
 
     if (diff < 0) return std.fmt.bufPrint(buf, "future", .{}) catch "?";
@@ -140,6 +139,7 @@ pub fn renderEntry(
     is_in_selection_set: bool,
     search_query: ?[]const u8,
     _: ColumnConfig,
+    now: i64,
 ) !void {
     const term_width = win.width;
     const is_failed = entry.exit_code != 0;
@@ -182,7 +182,7 @@ pub fn renderEntry(
     _ = win.printSegment(.{ .text = indicator, .style = indicator_style }, .{ .row_offset = row, .col_offset = 0 });
 
     var time_buf: [32]u8 = undefined;
-    const time_raw = formatRelativeTime(entry.timestamp, &time_buf);
+    const time_raw = formatRelativeTime(entry.timestamp, &time_buf, now);
     const time_text = try allocator.dupe(u8, time_raw);
     _ = win.printSegment(.{ .text = time_text, .style = dimmed_style }, .{ .row_offset = row, .col_offset = 6 });
 

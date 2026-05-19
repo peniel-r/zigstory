@@ -29,6 +29,7 @@ const Event = union(enum) {
 const TuiApp = struct {
     allocator: std.mem.Allocator,
     arena: std.heap.ArenaAllocator,
+    io: std.Io,
     buffer: [1024]u8,
     tty: vaxis.Tty,
     vx: vaxis.Vaxis,
@@ -42,30 +43,26 @@ const TuiApp = struct {
 
     // Search state (replaces current_entries)
     search_state: search_logic.SearchState,
-    selections: std.ArrayListUnmanaged(scrolling.HistoryEntry) = .{},
+    selections: std.ArrayListUnmanaged(scrolling.HistoryEntry) = .empty,
 
     selected_index: usize = 0,
 
     // Vim-like command mode
     command_mode: bool = false,
-    command_buffer: std.ArrayListUnmanaged(u8) = .{},
+    command_buffer: std.ArrayListUnmanaged(u8) = .empty,
 
     /// Initialize TUI application
-    pub fn init(allocator: std.mem.Allocator, db: *sqlite.Db, current_dir: ?[]const u8) !TuiApp {
+    pub fn init(allocator: std.mem.Allocator, db: *sqlite.Db, current_dir: ?[]const u8, io: std.Io, environ_map: *std.process.Environ.Map) !TuiApp {
         var buffer: [1024]u8 = undefined;
-        var tty = try vaxis.Tty.init(&buffer);
+        var tty = try vaxis.Tty.init(io, &buffer);
         errdefer tty.deinit();
 
-        var vx = try vaxis.init(allocator, .{
+        var vx = try vaxis.init(io, allocator, environ_map, .{
             .kitty_keyboard_flags = .{ .report_events = true },
         });
         errdefer vx.deinit(allocator, tty.writer());
 
-        var loop: vaxis.Loop(Event) = .{
-            .tty = &tty,
-            .vaxis = &vx,
-        };
-        try loop.init();
+        var loop = vaxis.Loop(Event).init(io, &tty, &vx);
         errdefer loop.stop();
 
         // Get total count from database
@@ -94,6 +91,7 @@ const TuiApp = struct {
         return TuiApp{
             .allocator = allocator,
             .arena = std.heap.ArenaAllocator.init(allocator),
+            .io = io,
             .buffer = buffer,
             .tty = tty,
             .vx = vx,
@@ -101,7 +99,7 @@ const TuiApp = struct {
             .db = db,
             .scroll_state = scroll_state,
             .search_state = search_state,
-            .selections = .{},
+            .selections = .empty,
         };
     }
 
@@ -111,16 +109,18 @@ const TuiApp = struct {
         defer self.loop.stop();
 
         try self.vx.enterAltScreen(self.tty.writer());
-        try self.vx.queryTerminal(self.tty.writer(), 1 * std.time.ns_per_s);
+        // queryTerminal now takes std.Io.Duration instead of nanosecond integer
+        try self.vx.queryTerminal(self.tty.writer(), .{ .nanoseconds = std.time.ns_per_s });
 
         // Main event loop
         while (!self.should_quit) {
             _ = self.arena.reset(.retain_capacity);
             const frame_allocator = self.arena.allocator();
 
-            self.loop.pollEvent();
+            // pollEvent and tryEvent now return error unions in vaxis 0.6
+            try self.loop.pollEvent();
 
-            while (self.loop.tryEvent()) |event| {
+            while (try self.loop.tryEvent()) |event| {
                 try self.handleEvent(event);
             }
 
@@ -289,7 +289,7 @@ const TuiApp = struct {
                     .select => {
                         if (self.selections.items.len > 0) {
                             // Construct piped command from selections
-                            var piped_cmd = std.ArrayListUnmanaged(u8){};
+                            var piped_cmd: std.ArrayListUnmanaged(u8) = .empty;
                             defer piped_cmd.deinit(self.allocator);
 
                             for (self.selections.items, 0..) |sel, i| {
@@ -367,6 +367,8 @@ const TuiApp = struct {
     /// Draw the TUI interface
     fn draw(self: *TuiApp, allocator: std.mem.Allocator) !void {
         const win = self.vx.window();
+        // Compute current time once per frame for relative timestamps.
+        const now: i64 = std.Io.Timestamp.now(self.io, .real).toSeconds();
 
         // IMPORTANT: Fill entire screen with background color FIRST
         // This ensures no transparency shows through
@@ -451,6 +453,7 @@ const TuiApp = struct {
                 is_in_selection_set,
                 query_for_highlight,
                 render.default_config,
+                now,
             );
         }
 
@@ -475,8 +478,8 @@ const TuiApp = struct {
 };
 
 /// Entry point for TUI search interface
-pub fn search(allocator: std.mem.Allocator, db: *sqlite.Db, current_dir: ?[]const u8) !?[]const u8 {
-    var app = try TuiApp.init(allocator, db, current_dir);
+pub fn search(allocator: std.mem.Allocator, db: *sqlite.Db, current_dir: ?[]const u8, io: std.Io, environ_map: *std.process.Environ.Map) !?[]const u8 {
+    var app = try TuiApp.init(allocator, db, current_dir, io, environ_map);
     defer app.deinit();
     try app.run();
 

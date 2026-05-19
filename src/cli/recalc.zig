@@ -19,7 +19,7 @@ fn progressCallback(processed: usize, total: usize, verbose: bool) void {
 }
 
 /// Recalculate all ranks in the database
-pub fn recalcRanks(params: RecalcParams, allocator: std.mem.Allocator) !void {
+pub fn recalcRanks(params: RecalcParams, allocator: std.mem.Allocator, io: std.Io) !void {
     // Open database
     var db = try sqlite.Db.init(.{
         .mode = sqlite.Db.Mode{ .File = params.db_path },
@@ -66,6 +66,7 @@ pub fn recalcRanks(params: RecalcParams, allocator: std.mem.Allocator) !void {
         ranking.FrecencyConfig{},
         params.batch_size,
         if (params.verbose) &Wrapper.cb else null,
+        io,
     );
 
     if (params.verbose) {

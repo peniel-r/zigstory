@@ -17,8 +17,8 @@ pub fn calculateFrecency(
     frequency: i64,
     last_used: i64,
     config: FrecencyConfig,
+    current_time: i64,
 ) f64 {
-    const current_time = std.time.timestamp();
     const seconds_since_last_use = current_time - last_used;
     const days_since_last_use = @max(1, seconds_since_last_use / 86400);
     const capped_days = @min(days_since_last_use, config.max_days);
@@ -237,8 +237,10 @@ pub fn updateHistoryRank(
     history_id: i64,
     cmd_hash: []const u8,
     config: FrecencyConfig,
+    io: std.Io,
 ) !void {
-    const current_time = std.time.timestamp();
+    // std.time.timestamp() removed in Zig 0.16 – use Io.Timestamp.
+    const current_time = std.Io.Timestamp.now(io, .real).toSeconds();
     const query =
         \\UPDATE history h
         \\SET rank = (
@@ -270,8 +272,10 @@ pub fn recalculateAllRanks(
     config: FrecencyConfig,
     batch_size: usize,
     progress_callback: ?ProgressCallback,
+    io: std.Io,
 ) !void {
-    const current_time = std.time.timestamp();
+    // std.time.timestamp() removed in Zig 0.16 – use Io.Timestamp.
+    const current_time = std.Io.Timestamp.now(io, .real).toSeconds();
 
     // Get total count
     var count_stmt = try db.prepare("SELECT COUNT(*) as total FROM history");

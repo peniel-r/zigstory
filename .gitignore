@@ -1,6 +1,7 @@
-# ---> Zig
+# Zig
 .zig-cache/
 zig-out/
+zig-pkg/
 
 # Output
 *.exe

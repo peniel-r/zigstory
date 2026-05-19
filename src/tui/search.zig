@@ -13,7 +13,7 @@ pub const SearchState = struct {
     pub fn init(allocator: std.mem.Allocator) SearchState {
         _ = allocator;
         return .{
-            .query = .{},
+            .query = .empty,
             .results = &[_]scrolling.HistoryEntry{},
             .selected_index = 0,
             .filter_state = directory_filter.DirectoryFilterState.init(null),
@@ -52,7 +52,7 @@ pub const SearchState = struct {
         }
 
         // Build LIKE pattern: %query%
-        var like_pattern = std.ArrayListUnmanaged(u8){};
+        var like_pattern: std.ArrayListUnmanaged(u8) = .empty;
         defer like_pattern.deinit(allocator);
 
         try like_pattern.append(allocator, '%');
@@ -74,7 +74,7 @@ pub const SearchState = struct {
             timestamp: i64,
         };
 
-        var new_results = std.ArrayListUnmanaged(scrolling.HistoryEntry){};
+        var new_results: std.ArrayListUnmanaged(scrolling.HistoryEntry) = .empty;
         errdefer {
             for (new_results.items) |e| {
                 allocator.free(e.cmd);

@@ -28,10 +28,11 @@ fn copyToClipboardWindows(allocator: std.mem.Allocator, text: []const u8) !void 
     const CF_UNICODETEXT = 13;
     const GHND = 0x0042;
 
-    if (OpenClipboard(null) == 0) return error.OpenClipboardFailed;
+    // windows.BOOL is now an enum type in Zig 0.16; use .toBool() for truthy checks.
+    if (!OpenClipboard(null).toBool()) return error.OpenClipboardFailed;
     defer _ = CloseClipboard();
 
-    if (EmptyClipboard() == 0) return error.EmptyClipboardFailed;
+    if (!EmptyClipboard().toBool()) return error.EmptyClipboardFailed;
 
     // Convert UTF-8 to UTF-16 for Windows clipboard
     const utf16_text = try std.unicode.utf8ToUtf16LeAllocZ(allocator, text);

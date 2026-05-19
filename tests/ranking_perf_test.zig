@@ -3,9 +3,9 @@ const sqlite = @import("sqlite");
 const ranking = @import("../src/db/ranking.zig");
 
 test "recalculation performance benchmark" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     // Create a test database
     const test_db_path = "test_perf_ranking.db";

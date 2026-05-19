@@ -1,7 +1,7 @@
 const std = @import("std");
 const sqlite = @import("sqlite");
 
-pub fn run(db: *sqlite.Db, allocator: std.mem.Allocator) !void {
+pub fn run(db: *sqlite.Db, allocator: std.mem.Allocator, io: std.Io) !void {
     // 1. Overview
     std.debug.print("\nOVERVIEW\n", .{});
     std.debug.print("--------\n", .{});
@@ -28,7 +28,7 @@ pub fn run(db: *sqlite.Db, allocator: std.mem.Allocator) !void {
     std.debug.print("--------------------------------------------------\n", .{});
     std.debug.print("{s:<4} {s:<45} {s:<8} {s:<15}\n", .{ "#", "Command", "Count", "Last Used" });
 
-    try printTopCommands(db, allocator);
+    try printTopCommands(db, allocator, io);
 
     // 3. Execution Distribution (Hourly)
     std.debug.print("\nACTIVITY BY HOUR\n", .{});
@@ -118,7 +118,7 @@ fn getSuccessRate(db: *sqlite.Db) !f64 {
     return 0.0;
 }
 
-fn printTopCommands(db: *sqlite.Db, allocator: std.mem.Allocator) !void {
+fn printTopCommands(db: *sqlite.Db, allocator: std.mem.Allocator, io: std.Io) !void {
     const query =
         \\SELECT cmd, COUNT(*) as count, MAX(timestamp) as last_used
         \\FROM history
@@ -145,7 +145,7 @@ fn printTopCommands(db: *sqlite.Db, allocator: std.mem.Allocator) !void {
 
         const row = (try iter.nextAlloc(arena.allocator(), .{})) orelse break;
 
-        const time_str = try formatRelativeTime(row.last_used, arena.allocator());
+        const time_str = try formatRelativeTime(row.last_used, arena.allocator(), io);
 
         // Truncate command if too long
         var display_cmd = try arena.allocator().dupe(u8, row.cmd);
@@ -258,8 +258,8 @@ fn printTopDirectories(db: *sqlite.Db, allocator: std.mem.Allocator) !void {
     }
 }
 
-fn formatRelativeTime(timestamp: i64, allocator: std.mem.Allocator) ![]u8 {
-    const now = std.time.timestamp();
+fn formatRelativeTime(timestamp: i64, allocator: std.mem.Allocator, io: std.Io) ![]u8 {
+    const now = std.Io.Timestamp.now(io, .real).toSeconds();
     const diff = now - timestamp;
 
     if (diff < 60) {

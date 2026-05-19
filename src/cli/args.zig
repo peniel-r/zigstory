@@ -34,8 +34,10 @@ pub const PerfParams = struct {
     threshold: i64 = 5000,
 };
 
-pub fn parse(allocator: std.mem.Allocator) !Action {
-    var iter = try std.process.argsWithAllocator(allocator);
+pub fn parse(allocator: std.mem.Allocator, process_args: std.process.Args) !Action {
+    // std.process.argsWithAllocator was removed in Zig 0.16.
+    // The new API: receive std.process.Args from main() and call iterateAllocator.
+    var iter = try process_args.iterateAllocator(allocator);
     defer iter.deinit();
 
     _ = iter.skip(); // skip binary name
@@ -65,7 +67,7 @@ pub fn parse(allocator: std.mem.Allocator) !Action {
     return .help;
 }
 
-fn parseAdd(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !Action {
+fn parseAdd(allocator: std.mem.Allocator, iter: *std.process.Args.Iterator) !Action {
     var cmd: ?[]const u8 = null;
     var cwd: ?[]const u8 = null;
     var exit_code: i32 = 0;
@@ -99,7 +101,7 @@ fn parseAdd(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !Actio
     };
 }
 
-fn parseList(_: std.mem.Allocator, iter: *std.process.ArgIterator) !Action {
+fn parseList(_: std.mem.Allocator, iter: *std.process.Args.Iterator) !Action {
     // Default count is 5
     var count: usize = 5;
 
@@ -116,7 +118,7 @@ fn parseList(_: std.mem.Allocator, iter: *std.process.ArgIterator) !Action {
     };
 }
 
-fn parseImport(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !Action {
+fn parseImport(allocator: std.mem.Allocator, iter: *std.process.Args.Iterator) !Action {
     var file: ?[]const u8 = null;
 
     while (iter.next()) |arg| {
@@ -132,7 +134,7 @@ fn parseImport(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !Ac
     };
 }
 
-fn parsePerf(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !Action {
+fn parsePerf(allocator: std.mem.Allocator, iter: *std.process.Args.Iterator) !Action {
     var cwd: ?[]const u8 = null;
     // Use string literal for format to avoid memory leaks
     var format_str: ?[]const u8 = null;
