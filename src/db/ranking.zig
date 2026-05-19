@@ -49,42 +49,57 @@ pub fn getCommandHash(cmd: []const u8, allocator: std.mem.Allocator) ![]const u8
 
 /// Create command_stats table for tracking frequency
 pub fn createCommandStatsTable(db: *sqlite.Db) !void {
-    try db.exec(
+    db.execDynamic(
         \\CREATE TABLE IF NOT EXISTS command_stats (
         \\    cmd_hash TEXT PRIMARY KEY,
         \\    cmd TEXT NOT NULL,
         \\    frequency INTEGER DEFAULT 1,
         \\    last_used INTEGER NOT NULL
-        \\);
-    , .{}, .{});
+        \\)
+    , .{}, .{}) catch |err| switch (err) {
+        error.SQLiteError, error.EmptyQuery => {},
+        else => return err,
+    };
 }
 
 /// Add cmd_hash column to history table
 pub fn addCmdHashColumn(db: *sqlite.Db) !void {
-    try db.exec(
-        \\ALTER TABLE history ADD COLUMN cmd_hash TEXT;
-    , .{}, .{});
+    db.execDynamic(
+        "ALTER TABLE history ADD COLUMN cmd_hash TEXT"
+    , .{}, .{}) catch |err| switch (err) {
+        error.SQLiteError, error.EmptyQuery => {},
+        else => return err,
+    };
 }
 
 /// Add rank column to history table
 pub fn addRankColumn(db: *sqlite.Db) !void {
-    try db.exec(
-        \\ALTER TABLE history ADD COLUMN rank REAL DEFAULT 0;
-    , .{}, .{});
+    db.execDynamic(
+        "ALTER TABLE history ADD COLUMN rank REAL DEFAULT 0"
+    , .{}, .{}) catch |err| switch (err) {
+        error.SQLiteError, error.EmptyQuery => {},
+        else => return err,
+    };
 }
 
 /// Create index on rank column
 pub fn createRankIndex(db: *sqlite.Db) !void {
-    try db.exec(
-        \\CREATE INDEX IF NOT EXISTS idx_rank ON history(rank DESC, timestamp DESC);
-    , .{}, .{});
+    db.execDynamic(
+        "CREATE INDEX IF NOT EXISTS idx_rank ON history(rank DESC, timestamp DESC)"
+    , .{}, .{}) catch |err| switch (err) {
+        error.SQLiteError, error.EmptyQuery => {},
+        else => return err,
+    };
 }
 
 /// Create index on cmd_hash column
 pub fn createCmdHashIndex(db: *sqlite.Db) !void {
-    try db.exec(
-        \\CREATE INDEX IF NOT EXISTS idx_cmd_hash ON history(cmd_hash);
-    , .{}, .{});
+    db.execDynamic(
+        "CREATE INDEX IF NOT EXISTS idx_cmd_hash ON history(cmd_hash)"
+    , .{}, .{}) catch |err| switch (err) {
+        error.SQLiteError, error.EmptyQuery => {},
+        else => return err,
+    };
 }
 
 /// Backfill cmd_hash for existing history entries that don't have it
@@ -242,13 +257,13 @@ pub fn updateHistoryRank(
     // std.time.timestamp() removed in Zig 0.16 – use Io.Timestamp.
     const current_time = std.Io.Timestamp.now(io, .real).toSeconds();
     const query =
-        \\UPDATE history h
+        \\UPDATE history
         \\SET rank = (
         \\    SELECT (s.frequency * ?) + (? / MAX(1, (? - s.last_used) / 86400.0))
         \\    FROM command_stats s
         \\    WHERE s.cmd_hash = ?
         \\)
-        \\WHERE h.id = ?;
+        \\WHERE id = ?
     ;
 
     var stmt = try db.prepare(query);

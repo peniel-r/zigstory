@@ -1,4 +1,4 @@
-set shell := ["cmd.exe", "/c"]
+set shell := ["pwsh.exe", "-NoProfile", "-Command"]
 
 # Justfile for building zigstory and predictor plugin
 
@@ -8,7 +8,7 @@ build-zig:
 
 # Build the predictor plugin in release mode (publish for win-x64)
 build-plugin:
-    @dotnet publish src/predictor/zigstoryPredictor.csproj -c Release -r win-x64 --self-contained false -o src/predictor/bin/publish
+    @$env:DOTNET_ROOT = "$HOME\scoop\apps\dotnet-sdk\current"; & "$env:DOTNET_ROOT\dotnet.exe" publish src/predictor/zigstoryPredictor.csproj -c Release -r win-x64 --self-contained false -o src/predictor/bin/publish
 
 # Build both zig application and predictor plugin in release mode
 build: build-zig build-plugin
@@ -23,7 +23,7 @@ debug-zig:
 
 # Build plugin in debug mode
 debug-plugin:
-    @dotnet build src/predictor/zigstoryPredictor.csproj -c Debug
+    @$env:DOTNET_ROOT = "$HOME\scoop\apps\dotnet-sdk\current"; & "$env:DOTNET_ROOT\dotnet.exe" build src/predictor/zigstoryPredictor.csproj -c Debug
 
 # Build everything in debug mode
 debug: debug-zig debug-plugin

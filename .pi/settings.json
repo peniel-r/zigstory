@@ -1,0 +1,4 @@
+{
+  "shellPath": "C:\\apps\\PowerShell-7\\pwsh.exe",
+  "shellCommandPrefix": "$ErrorActionPreference = 'Stop'; "
+}
