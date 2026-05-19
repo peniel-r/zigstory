@@ -33,12 +33,12 @@
     // internet connectivity.
     .dependencies = .{
         .sqlite = .{
-            .url = "https://github.com/vrischmann/zig-sqlite/archive/master.tar.gz",
-            .hash = "sqlite-3.48.0-F2R_a8eODgD9X8XjvWlZ1K7C-tDuHae4FuShM2N-yIT2",
+            .url = "git+https://github.com/vrischmann/zig-sqlite.git#fb73a6cca771c0c26fbab1a1f7689c23ec786257",
+            .hash = "sqlite-3.48.0-F2R_a8WODgDamFQx1fOrpgY7IdluD4Sr_P7G0UPxUUMr",
         },
         .vaxis = .{
-            .url = "git+https://github.com/rockorager/libvaxis.git#75035b169e91a51c233f3742161f8eb8eafca659",
-            .hash = "vaxis-0.5.1-BWNV_IE-CQBYmSf_boEKUyv6den0Gmj5LksxvdCx2pBL",
+            .url = "git+https://github.com/rockorager/libvaxis.git#60a507c25b5335e222eb12320aa7514db684d4a4",
+            .hash = "vaxis-0.6.0-BWNV_HHwCQCy33z_jb0RHLjoinqQ8tgQVZI9z2e5Yqdd",
         },
     },
     .paths = .{
