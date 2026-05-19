@@ -36,7 +36,8 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    exe.linkLibC();
+    // Zig 0.16: Build.Step.Compile no longer exposes linkLibC().
+    // Linking libc is handled via module/executable options or dependency modules.
     if (target.result.os.tag == .windows) {
         exe.linkSystemLibrary("user32");
     }
