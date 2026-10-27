@@ -52,55 +52,55 @@ const TuiApp = struct {
     command_buffer: std.ArrayListUnmanaged(u8) = .empty,
 
     /// Initialize TUI application
-    pub fn init(allocator: std.mem.Allocator, db: *sqlite.Db, current_dir: ?[]const u8, io: std.Io, environ_map: *std.process.Environ.Map) !TuiApp {
-        var buffer: [1024]u8 = undefined;
-        var tty = try vaxis.Tty.init(io, &buffer);
-        errdefer tty.deinit();
+    pub fn init(self: *TuiApp, allocator: std.mem.Allocator, db: *sqlite.Db, current_dir: ?[]const u8, io: std.Io, environ_map: *std.process.Environ.Map) !void {
+        // The writer borrows buffer; the input loop borrows tty and vx.
+        // Initialize in place and do not move the app after this point.
+        self.* = .{
+            .allocator = allocator,
+            .arena = std.heap.ArenaAllocator.init(allocator),
+            .io = io,
+            .buffer = undefined,
+            .tty = undefined,
+            .vx = undefined,
+            .loop = undefined,
+            .db = db,
+            .scroll_state = .{},
+            .search_state = search_logic.SearchState.init(allocator),
+        };
+        errdefer self.arena.deinit();
+        errdefer self.search_state.deinit(allocator);
 
-        var vx = try vaxis.init(io, allocator, environ_map, .{
+        self.tty = try vaxis.Tty.init(io, &self.buffer);
+        errdefer self.tty.deinit();
+
+        self.vx = try vaxis.init(io, allocator, environ_map, .{
             .kitty_keyboard_flags = .{ .report_events = true },
         });
-        errdefer vx.deinit(allocator, tty.writer());
+        errdefer self.vx.deinit(allocator, self.tty.writer());
 
-        var loop = vaxis.Loop(Event).init(io, &tty, &vx);
-        errdefer loop.stop();
+        self.loop = vaxis.Loop(Event).init(io, &self.tty, &self.vx);
 
         // Get total count from database
-        const total_count = scrolling.getHistoryCount(db) catch 0;
+        const total_count = try scrolling.getHistoryCount(db);
 
         // Initialize scroll state
-        const scroll_state = scrolling.ScrollingState{
+        self.scroll_state = scrolling.ScrollingState{
             .total_count = total_count,
             .scroll_position = 0,
             .visible_rows = 20, // Will be updated on first draw
             .page_size = 100,
         };
 
-        var search_state = search_logic.SearchState.init(allocator);
         // Set current directory for filtering
-        search_state.filter_state = directory_filter.DirectoryFilterState.init(current_dir);
+        self.search_state.filter_state = directory_filter.DirectoryFilterState.init(current_dir);
 
         // Fetch initial page of entries (Browsing mode)
-        search_state.results = try scrolling.fetchHistoryPage(
+        self.search_state.results = try scrolling.fetchHistoryPage(
             db,
             allocator,
-            scroll_state.page_size,
+            self.scroll_state.page_size,
             0,
         );
-
-        return TuiApp{
-            .allocator = allocator,
-            .arena = std.heap.ArenaAllocator.init(allocator),
-            .io = io,
-            .buffer = buffer,
-            .tty = tty,
-            .vx = vx,
-            .loop = loop,
-            .db = db,
-            .scroll_state = scroll_state,
-            .search_state = search_state,
-            .selections = .empty,
-        };
     }
 
     /// Run the TUI main loop
@@ -111,6 +111,8 @@ const TuiApp = struct {
         try self.vx.enterAltScreen(self.tty.writer());
         // queryTerminal now takes std.Io.Duration instead of nanosecond integer
         try self.vx.queryTerminal(self.tty.writer(), .{ .nanoseconds = std.time.ns_per_s });
+
+        try self.drawInitialFrame();
 
         // Main event loop
         while (!self.should_quit) {
@@ -129,6 +131,14 @@ const TuiApp = struct {
             try self.vx.render(self.tty.writer());
             try self.tty.writer().flush();
         }
+    }
+
+    fn drawInitialFrame(self: *TuiApp) !void {
+        // Windows does not guarantee a resize event when entering the alt screen.
+        try self.handleEvent(.{ .winsize = try self.tty.getWinsize() });
+        try self.draw(self.arena.allocator());
+        try self.vx.render(self.tty.writer());
+        try self.tty.writer().flush();
     }
 
     fn isSearching(self: *TuiApp) bool {
@@ -479,9 +489,77 @@ const TuiApp = struct {
 
 /// Entry point for TUI search interface
 pub fn search(allocator: std.mem.Allocator, db: *sqlite.Db, current_dir: ?[]const u8, io: std.Io, environ_map: *std.process.Environ.Map) !?[]const u8 {
-    var app = try TuiApp.init(allocator, db, current_dir, io, environ_map);
+    var app: TuiApp = undefined;
+    try app.init(allocator, db, current_dir, io, environ_map);
     defer app.deinit();
     try app.run();
 
     return app.selected_command;
+}
+
+test "TUI initialization retains pointers to app-owned storage" {
+    const allocator = std.testing.allocator;
+    var environ_map: std.process.Environ.Map = .init(allocator);
+    defer environ_map.deinit();
+    var db = try sqlite.Db.init(.{
+        .mode = .Memory,
+        .open_flags = .{ .write = true, .create = true },
+    });
+    defer db.deinit();
+    try db.exec(
+        \\CREATE TABLE history (
+        \\  id INTEGER PRIMARY KEY, cmd TEXT, cwd TEXT, exit_code INTEGER,
+        \\  duration_ms INTEGER, timestamp INTEGER
+        \\)
+    , .{}, .{});
+
+    var app: TuiApp = undefined;
+    try app.init(allocator, &db, null, std.testing.io, &environ_map);
+    defer app.deinit();
+
+    try std.testing.expect(app.loop.tty == &app.tty);
+    try std.testing.expect(app.loop.vaxis == &app.vx);
+    if (@import("builtin").os.tag == .windows) {
+        try std.testing.expect(app.tty.writer().buffer.ptr == &app.buffer);
+    }
+}
+
+test "TUI renders the initial frame without input or resize events" {
+    const allocator = std.testing.allocator;
+    var environ_map: std.process.Environ.Map = .init(allocator);
+    defer environ_map.deinit();
+    var db = try sqlite.Db.init(.{
+        .mode = .Memory,
+        .open_flags = .{ .write = true, .create = true },
+    });
+    defer db.deinit();
+    try db.exec(
+        \\CREATE TABLE history (
+        \\  id INTEGER PRIMARY KEY, cmd TEXT, cwd TEXT, exit_code INTEGER,
+        \\  duration_ms INTEGER, timestamp INTEGER
+        \\)
+    , .{}, .{});
+    try db.exec("INSERT INTO history VALUES (1, 'echo startup', 'C:\\', 0, 0, 0)", .{}, .{});
+
+    var app: TuiApp = undefined;
+    try app.init(allocator, &db, null, std.testing.io, &environ_map);
+    defer app.deinit();
+
+    try std.testing.expectEqual(@as(u16, 0), app.vx.window().height);
+    try std.testing.expect(try app.loop.tryEvent() == null);
+    try app.drawInitialFrame();
+    const size = try app.tty.getWinsize();
+    try std.testing.expectEqual(size.cols, app.vx.window().width);
+    try std.testing.expectEqual(size.rows, app.vx.window().height);
+    try std.testing.expectEqual(
+        scrolling.ScrollingState.calculateViewport(size.rows),
+        app.scroll_state.visible_rows,
+    );
+    try std.testing.expect(try app.loop.tryEvent() == null);
+    try std.testing.expectEqual(@as(usize, 1), app.search_state.results.len);
+    try std.testing.expectEqualStrings("echo startup", app.search_state.results[0].cmd);
+    try std.testing.expectEqualStrings("e", app.vx.screen.readCell(25, 2).?.char.grapheme);
+    if (@import("builtin").os.tag == .windows) {
+        try std.testing.expectEqual(@as(usize, 0), app.tty.writer().end);
+    }
 }

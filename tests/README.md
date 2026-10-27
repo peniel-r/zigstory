@@ -29,6 +29,15 @@ pwsh -NoProfile -File tests/run_tests.ps1 -KeepDb
 
 ## Test Groups
 
+TUI startup regressions run separately with Zig 0.16:
+
+```powershell
+zig build test-tui
+```
+
+These check that terminal resources retain app-owned pointers and that the first
+frame is rendered at the terminal's current size without input or resize events.
+
 | ID | Area | What is tested |
 |----|------|----------------|
 | T01 | `help` | No-args, `--help`, `-h` — output structure |

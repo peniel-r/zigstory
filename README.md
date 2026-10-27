@@ -181,6 +181,14 @@ The `zsprofile.ps1` script automatically configures:
 - ✅ Ctrl+R keybinding for TUI search
 - ✅ Ctrl+F keybinding for fzf search
 
+The TUI reads the terminal size and draws its first frame without waiting for a
+resize event. This avoids a blank alternate screen on terminals that do not emit
+an initial resize event, including Windows Terminal configurations.
+
+After updating the TUI binary, rebuild with Zig 0.16 and copy
+`zig-out\bin\zigstory.exe` to `%APPDATA%\zigstory\zigstory.exe` if installed there;
+the profile integration prefers that installed copy over the development binary.
+
 **Note:** If you prefer inline view instead of list view, add this to your profile after sourcing `zsprofile.ps1`:
 
 ```powershell
