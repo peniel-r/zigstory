@@ -64,9 +64,7 @@ pub fn createCommandStatsTable(db: *sqlite.Db) !void {
 
 /// Add cmd_hash column to history table
 pub fn addCmdHashColumn(db: *sqlite.Db) !void {
-    db.execDynamic(
-        "ALTER TABLE history ADD COLUMN cmd_hash TEXT"
-    , .{}, .{}) catch |err| switch (err) {
+    db.execDynamic("ALTER TABLE history ADD COLUMN cmd_hash TEXT", .{}, .{}) catch |err| switch (err) {
         error.SQLiteError, error.EmptyQuery => {},
         else => return err,
     };
@@ -74,9 +72,7 @@ pub fn addCmdHashColumn(db: *sqlite.Db) !void {
 
 /// Add rank column to history table
 pub fn addRankColumn(db: *sqlite.Db) !void {
-    db.execDynamic(
-        "ALTER TABLE history ADD COLUMN rank REAL DEFAULT 0"
-    , .{}, .{}) catch |err| switch (err) {
+    db.execDynamic("ALTER TABLE history ADD COLUMN rank REAL DEFAULT 0", .{}, .{}) catch |err| switch (err) {
         error.SQLiteError, error.EmptyQuery => {},
         else => return err,
     };
@@ -84,9 +80,7 @@ pub fn addRankColumn(db: *sqlite.Db) !void {
 
 /// Create index on rank column
 pub fn createRankIndex(db: *sqlite.Db) !void {
-    db.execDynamic(
-        "CREATE INDEX IF NOT EXISTS idx_rank ON history(rank DESC, timestamp DESC)"
-    , .{}, .{}) catch |err| switch (err) {
+    db.execDynamic("CREATE INDEX IF NOT EXISTS idx_rank ON history(rank DESC, timestamp DESC)", .{}, .{}) catch |err| switch (err) {
         error.SQLiteError, error.EmptyQuery => {},
         else => return err,
     };
@@ -94,9 +88,7 @@ pub fn createRankIndex(db: *sqlite.Db) !void {
 
 /// Create index on cmd_hash column
 pub fn createCmdHashIndex(db: *sqlite.Db) !void {
-    db.execDynamic(
-        "CREATE INDEX IF NOT EXISTS idx_cmd_hash ON history(cmd_hash)"
-    , .{}, .{}) catch |err| switch (err) {
+    db.execDynamic("CREATE INDEX IF NOT EXISTS idx_cmd_hash ON history(cmd_hash)", .{}, .{}) catch |err| switch (err) {
         error.SQLiteError, error.EmptyQuery => {},
         else => return err,
     };
@@ -232,7 +224,7 @@ pub fn updateCommandStats(
         \\VALUES (?, ?, 1, ?)
         \\ON CONFLICT(cmd_hash) DO UPDATE SET
         \\    frequency = frequency + 1,
-        \\    last_used = ?;
+        \\    last_used = MAX(last_used, ?);
     ;
 
     var stmt = try db.prepare(query);
@@ -289,6 +281,7 @@ pub fn recalculateAllRanks(
     progress_callback: ?ProgressCallback,
     io: std.Io,
 ) !void {
+    if (batch_size == 0) return error.InvalidBatchSize;
     // std.time.timestamp() removed in Zig 0.16 – use Io.Timestamp.
     const current_time = std.Io.Timestamp.now(io, .real).toSeconds();
 
@@ -303,34 +296,38 @@ pub fn recalculateAllRanks(
     // Update in batches
     const update_query =
         \\UPDATE history
-        \\SET rank = (
-        \\    SELECT COALESCE(
-        \\        (s.frequency * ?) + (? / MAX(1, (? - s.last_used) / 86400.0)),
-        \\        0
-        \\    )
+        \\SET rank = COALESCE((
+        \\    SELECT
+        \\        (s.frequency * ?) + (? / MAX(1, (? - s.last_used) / 86400.0))
         \\    FROM command_stats s
         \\    WHERE s.cmd_hash = history.cmd_hash
-        \\)
-        \\WHERE id BETWEEN ? AND ?;
+        \\), 0)
+        \\WHERE id IN (SELECT id FROM history WHERE id > ? ORDER BY id LIMIT ?);
     ;
 
     var processed: i64 = 0;
+    var last_id: i64 = 0;
+    var stmt = try db.prepare(update_query);
+    defer stmt.deinit();
+    var end_stmt = try db.prepare("SELECT MAX(id) AS id FROM (SELECT id FROM history WHERE id > ? ORDER BY id LIMIT ?)");
+    defer end_stmt.deinit();
     while (processed < total) {
         const batch_i64 = @as(i64, @intCast(batch_size));
-        const end = @min(processed + batch_i64 - 1, total - 1);
-
-        var stmt = try db.prepare(update_query);
-        defer stmt.deinit();
+        var end_iter = try end_stmt.iterator(struct { id: ?i64 }, .{ last_id, batch_i64 });
+        const end = (try end_iter.next(.{})).?.id orelse break;
+        end_stmt.reset();
 
         try stmt.exec(.{}, .{
             config.frequency_weight,
             config.recency_weight,
             current_time,
-            processed + 1,
-            end + 1,
+            last_id,
+            batch_i64,
         });
+        stmt.reset();
 
-        processed = end + 1;
+        last_id = end;
+        processed = @min(processed + batch_i64, total);
 
         if (progress_callback) |cb| {
             cb(@intCast(processed), @intCast(total));

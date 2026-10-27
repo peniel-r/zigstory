@@ -47,8 +47,8 @@ pub fn printHelp() void {
         \\    selecting commands from your history.
         \\
         \\    FEATURES:
-        \\      * Real-time fuzzy search as you type
-        \\      * Virtual scrolling for large histories (10,000+ commands)
+        \\      * Real-time substring search as you type
+        \\      * Paged results with full counts and no fixed result limit
         \\      * Keyboard navigation (Up/Down, Page Up/Down, Ctrl+K/J)
         \\      * Selected command copied to clipboard
         \\
@@ -56,6 +56,8 @@ pub fn printHelp() void {
         \\      Up/Down       Navigate up/down
         \\      Page Up/Down  Scroll by page
         \\      Ctrl+K/J      Page up/down (vim-style)
+        \\      Ctrl+F        Toggle global/current-directory filtering
+        \\      Ctrl+U        Clear query while preserving directory filtering
         \\      Enter         Select command and exit
         \\      Ctrl+C/Esc    Exit without selection
         \\      Type          Filter results in real-time
@@ -87,17 +89,18 @@ pub fn printHelp() void {
         \\    Automatically detects PowerShell history file location.
         \\
         \\    OPTIONS:
-        \\      -f, --file <PATH>        Import from specific file (optional)
+        \\      -f, --file <PATH>        Import a JSON batch (optional)
         \\
         \\    FEATURES:
-        \\      * Automatic duplicate detection
+        \\      * Duplicate detection for PSReadLine history
         \\      * Progress tracking during import
         \\      * Handles large history files (10,000+ commands)
-        \\      * Preserves command timestamps
+        \\      * Atomic history, statistics, and new-entry rank updates
+        \\      * Invalid JSON entries reject the entire batch
         \\
         \\    EXAMPLE:
         \\      zigstory import                           # Import from default location
-        \\      zigstory import --file "C:\custom.txt"    # Import from custom file
+        \\      zigstory import --file "C:\history.json"  # Import a JSON batch
         \\
         \\-------------------------------------------------------------------------------
         \\
@@ -160,7 +163,8 @@ pub fn printHelp() void {
         \\      Uses frecency algorithm: rank = (frequency * 2.0) + (100.0 / days_since_last_use)
         \\
         \\    FEATURES:
-        \\      * Batch updates (100 rows per transaction)
+        \\      * Batched updates in one atomic transaction
+        \\      * Repairs incomplete statistics and handles gaps in history IDs
         \\      * Progress tracking during recalculation
         \\      * Optimized for 10,000+ entries
         \\      * Completes in <1s for 10,000 entries
@@ -308,14 +312,16 @@ fn printSearchHelp() void {
         \\    ↑/↓                      Navigate up/down
         \\    Page Up/Down             Scroll by page
         \\    Ctrl+K/J                 Page up/down (vim-style)
+        \\    Ctrl+F                   Toggle global/current-directory filtering
+        \\    Ctrl+U                   Clear query while preserving directory filtering
         \\    Enter                    Select command and exit
         \\    Ctrl+C/Esc               Exit without selection
         \\    Type                     Filter results in real-time
         \\
         \\FEATURES:
-        \\    • Real-time fuzzy search as you type
-        \\    • Virtual scrolling for large histories (10,000+ commands)
-        \\    • Sub-5ms query performance
+        \\    • Real-time substring search as you type
+        \\    • Paged results with full counts and no fixed result limit
+        \\    • Indexed timestamp ordering for recent-history browsing
         \\    • Selected command copied to clipboard
         \\
         \\EXAMPLES:
@@ -365,7 +371,7 @@ fn printImportHelp() void {
         \\    zigstory import [OPTIONS]
         \\
         \\OPTIONS:
-        \\    -f, --file <PATH>        Import from specific file (optional)
+        \\    -f, --file <PATH>        Import a JSON batch (optional)
         \\
         \\DESCRIPTION:
         \\    Imports existing PowerShell history into the zigstory database.
@@ -374,14 +380,15 @@ fn printImportHelp() void {
         \\    the same commands multiple times.
         \\
         \\FEATURES:
-        \\    • Automatic duplicate detection
+        \\    • Duplicate detection for PSReadLine history
         \\    • Progress tracking during import
         \\    • Handles large history files (10,000+ commands)
-        \\    • Preserves command timestamps
+        \\    • Atomic history, statistics, and new-entry rank updates
+        \\    • Invalid JSON entries reject the entire batch
         \\
         \\EXAMPLES:
         \\    zigstory import                           # Import from default location
-        \\    zigstory import --file "C:\custom.txt"    # Import from custom file
+        \\    zigstory import --file "C:\history.json"  # Import a JSON batch
         \\
         \\
     ;
@@ -464,7 +471,8 @@ fn printRecalcRankHelp() void {
         \\        • days_since_last_use = days since most recent execution
         \\
         \\FEATURES:
-        \\      • Batch updates (100 rows per transaction)
+        \\      • Batched updates in one atomic transaction
+        \\      • Repairs incomplete statistics and handles gaps in history IDs
         \\      • Progress tracking during recalculation
         \\      • Optimized for 10,000+ entries
         \\      • Completes in <1s for 10,000 entries

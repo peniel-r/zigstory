@@ -59,7 +59,7 @@ pub fn listEntries(db: *sqlite.Db, requested_count: usize, allocator: std.mem.Al
     const show_count = @min(requested_count, @as(usize, @intCast(total_count)));
 
     // Query for last N entries ordered by timestamp
-    const query = "SELECT cmd, cwd, exit_code, duration_ms, timestamp FROM history ORDER BY timestamp DESC";
+    const query = "SELECT cmd, cwd, exit_code, duration_ms, timestamp FROM history ORDER BY timestamp DESC, id DESC LIMIT ?";
 
     var stmt = try db.prepare(query);
     defer stmt.deinit();
@@ -72,7 +72,7 @@ pub fn listEntries(db: *sqlite.Db, requested_count: usize, allocator: std.mem.Al
         timestamp: i64,
     };
 
-    var iter = try stmt.iterator(QueryRow, .{});
+    var iter = try stmt.iterator(QueryRow, .{@as(i64, @intCast(show_count))});
     var index: usize = 0;
 
     // Print header

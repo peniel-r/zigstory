@@ -46,6 +46,7 @@ const TuiApp = struct {
     selections: std.ArrayListUnmanaged(scrolling.HistoryEntry) = .empty,
 
     selected_index: usize = 0,
+    search_dirty: bool = false,
 
     // Vim-like command mode
     command_mode: bool = false,
@@ -80,12 +81,8 @@ const TuiApp = struct {
 
         self.loop = vaxis.Loop(Event).init(io, &self.tty, &self.vx);
 
-        // Get total count from database
-        const total_count = try scrolling.getHistoryCount(db);
-
         // Initialize scroll state
         self.scroll_state = scrolling.ScrollingState{
-            .total_count = total_count,
             .scroll_position = 0,
             .visible_rows = 20, // Will be updated on first draw
             .page_size = 100,
@@ -94,13 +91,8 @@ const TuiApp = struct {
         // Set current directory for filtering
         self.search_state.filter_state = directory_filter.DirectoryFilterState.init(current_dir);
 
-        // Fetch initial page of entries (Browsing mode)
-        self.search_state.results = try scrolling.fetchHistoryPage(
-            db,
-            allocator,
-            self.scroll_state.page_size,
-            0,
-        );
+        self.search_dirty = true;
+        try self.flushSearch();
     }
 
     /// Run the TUI main loop
@@ -124,8 +116,11 @@ const TuiApp = struct {
 
             while (try self.loop.tryEvent()) |event| {
                 try self.handleEvent(event);
+                if (self.should_quit) break;
             }
 
+            if (self.should_quit) break;
+            try self.flushSearch();
             try self.draw(frame_allocator);
 
             try self.vx.render(self.tty.writer());
@@ -145,13 +140,17 @@ const TuiApp = struct {
         return self.search_state.query.items.len > 0;
     }
 
-    /// Perform fuzzy search and reset scroll
-    fn performFuzzySearch(self: *TuiApp) !void {
-        try self.search_state.performSearch(self.db, self.allocator, 50000);
-        // In search mode, total count is the number of results
-        self.scroll_state.total_count = self.search_state.results.len;
+    fn flushSearch(self: *TuiApp) !void {
+        if (!self.search_dirty) return;
         self.scroll_state.scroll_position = 0;
         self.selected_index = 0;
+        try self.search_state.loadPage(self.db, self.pageSize(), 0, true);
+        self.scroll_state.total_count = self.search_state.total_count;
+        self.search_dirty = false;
+    }
+
+    fn pageSize(self: *TuiApp) usize {
+        return @max(self.scroll_state.page_size, self.scroll_state.visible_rows);
     }
 
     /// Toggle selection of an entry
@@ -169,10 +168,14 @@ const TuiApp = struct {
 
         // Add selection if not full
         if (self.selections.items.len < 5) {
+            const cmd = try self.allocator.dupe(u8, entry.cmd);
+            errdefer self.allocator.free(cmd);
+            const cwd = try self.allocator.dupe(u8, entry.cwd);
+            errdefer self.allocator.free(cwd);
             const new_entry = scrolling.HistoryEntry{
                 .id = entry.id,
-                .cmd = try self.allocator.dupe(u8, entry.cmd),
-                .cwd = try self.allocator.dupe(u8, entry.cwd),
+                .cmd = cmd,
+                .cwd = cwd,
                 .exit_code = entry.exit_code,
                 .duration_ms = entry.duration_ms,
                 .timestamp = entry.timestamp,
@@ -233,11 +236,11 @@ const TuiApp = struct {
 
                 // Toggles selection with Shift + Space
                 if (key.matches(' ', .{}) and key.mods.shift) {
+                    try self.flushSearch();
                     const entry = try navigation.getSelectedCommandEntry(
                         self.search_state.results,
                         self.selected_index,
-                        self.scroll_state.scroll_position,
-                        self.isSearching(),
+                        self.search_state.results_offset,
                     );
 
                     if (entry) |e| {
@@ -250,7 +253,7 @@ const TuiApp = struct {
                 if (key.matches(vaxis.Key.backspace, .{})) {
                     if (self.search_state.query.items.len > 0) {
                         _ = self.search_state.query.pop();
-                        try self.performFuzzySearch();
+                        self.search_dirty = true;
                     }
                     return;
                 }
@@ -258,22 +261,19 @@ const TuiApp = struct {
                 // Handle Ctrl+F to toggle directory filter
                 if (key.matches('f', .{ .ctrl = true })) {
                     self.search_state.filter_state.toggleMode();
-                    // Refresh results after toggling filter
-                    if (self.isSearching()) {
-                        try self.performFuzzySearch();
-                    } else {
-                        try self.refreshEntries();
-                    }
+                    self.search_dirty = true;
                     return;
                 }
 
                 // Handle text input for search
                 if (key.text) |text| {
                     try self.search_state.query.appendSlice(self.allocator, text);
-                    try self.performFuzzySearch();
+                    self.search_dirty = true;
                     return;
                 }
 
+                // Navigation and selection must see all preceding queued edits.
+                try self.flushSearch();
                 // Create navigation state
                 const old_scroll_pos = self.scroll_state.scroll_position;
                 var nav_state = navigation.NavigationState{
@@ -313,36 +313,27 @@ const TuiApp = struct {
                                 self.allocator,
                                 self.search_state.results,
                                 self.selected_index,
-                                self.scroll_state.scroll_position,
-                                self.isSearching(),
+                                self.search_state.results_offset,
                             );
                         }
                         self.should_quit = true;
                     },
                     .refresh => {
-                        // Refresh search results
-                        if (self.isSearching()) {
-                            try self.performFuzzySearch();
-                        } else {
-                            try self.refreshEntries();
-                        }
+                        self.search_dirty = true;
                     },
                     .clear_search => {
                         // Clear search query (Ctrl+U)
                         self.search_state.query.clearRetainingCapacity();
-                        try self.performFuzzySearch();
+                        self.search_dirty = true;
                     },
                     .exit_search_mode => {
                         // Exit search mode and return to browser
                         self.search_state.query.clearRetainingCapacity();
-                        self.scroll_state.total_count = try scrolling.getHistoryCount(self.db);
-                        self.scroll_state.scroll_position = 0;
-                        self.selected_index = 0;
-                        try self.refreshEntries();
+                        self.search_dirty = true;
                     },
                     .none => {
                         // Check if we need to refresh due to scroll position change
-                        if (!self.isSearching() and nav_state.needsRefresh(old_scroll_pos)) {
+                        if (nav_state.needsRefresh(old_scroll_pos)) {
                             try self.refreshEntries();
                         }
                     },
@@ -352,24 +343,24 @@ const TuiApp = struct {
                 // Handle terminal resize
                 try self.vx.resize(self.allocator, self.tty.writer(), ws);
                 self.scroll_state.visible_rows = scrolling.ScrollingState.calculateViewport(ws.rows);
+                try self.refreshEntries();
             },
             else => {},
         }
     }
 
-    /// Refresh entries (mostly for browser mode)
     fn refreshEntries(self: *TuiApp) !void {
-        if (self.isSearching()) {
-            return; // Search results are static until query changes
+        const start = self.scroll_state.scroll_position;
+        const end = @min(start + self.scroll_state.visible_rows, self.scroll_state.total_count);
+        const cached_end = self.search_state.results_offset + self.search_state.results.len;
+        if (start >= self.search_state.results_offset and end <= cached_end) {
+            return;
         }
-
-        // Browser Mode: Fetch from DB using OFFSET
-        self.search_state.clearResults(self.allocator);
-        self.search_state.results = try scrolling.fetchHistoryPage(
+        try self.search_state.loadPage(
             self.db,
-            self.allocator,
-            self.scroll_state.page_size,
-            self.scroll_state.scroll_position,
+            self.pageSize(),
+            start,
+            false,
         );
     }
 
@@ -401,7 +392,7 @@ const TuiApp = struct {
             search_query,
             self.scroll_state.total_count,
             self.selected_index,
-            self.search_state.results.len,
+            self.search_state.total_count,
             self.selections.items.len,
             filter_mode_str,
             self.command_mode,
@@ -412,25 +403,9 @@ const TuiApp = struct {
         const start_row: u16 = 2;
 
         // Determine entries to display
-        var display_slice: []scrolling.HistoryEntry = undefined;
-        var start_index: usize = 0;
-
-        if (self.isSearching()) {
-            // In search mode, results contains ALL matches.
-            // We need to slice based on scroll_position.
-            const total = self.search_state.results.len;
-            if (self.scroll_state.scroll_position >= total) {
-                start_index = 0; // Should not happen if clamped
-            } else {
-                start_index = self.scroll_state.scroll_position;
-            }
-            display_slice = self.search_state.results[start_index..];
-        } else {
-            // In browser mode, fetchHistoryPage returns entries starting at scroll_position.
-            // So results[0] IS scroll_position.
-            display_slice = self.search_state.results;
-            start_index = self.scroll_state.scroll_position;
-        }
+        const start_index = self.scroll_state.scroll_position;
+        const local_start = @min(start_index -| self.search_state.results_offset, self.search_state.results.len);
+        const display_slice = self.search_state.results[local_start..];
 
         const visible_count = @min(display_slice.len, self.scroll_state.visible_rows);
 
@@ -489,12 +464,15 @@ const TuiApp = struct {
 
 /// Entry point for TUI search interface
 pub fn search(allocator: std.mem.Allocator, db: *sqlite.Db, current_dir: ?[]const u8, io: std.Io, environ_map: *std.process.Environ.Map) !?[]const u8 {
+    // The CLI's command-scoped arena cannot reclaim repeated search allocations.
+    const app_allocator = std.heap.smp_allocator;
     var app: TuiApp = undefined;
-    try app.init(allocator, db, current_dir, io, environ_map);
+    try app.init(app_allocator, db, current_dir, io, environ_map);
     defer app.deinit();
+    defer if (app.selected_command) |cmd| app_allocator.free(cmd);
     try app.run();
 
-    return app.selected_command;
+    return if (app.selected_command) |cmd| try allocator.dupe(u8, cmd) else null;
 }
 
 test "TUI initialization retains pointers to app-owned storage" {
@@ -561,5 +539,159 @@ test "TUI renders the initial frame without input or resize events" {
     try std.testing.expectEqualStrings("e", app.vx.screen.readCell(25, 2).?.char.grapheme);
     if (@import("builtin").os.tag == .windows) {
         try std.testing.expectEqual(@as(usize, 0), app.tty.writer().end);
+    }
+}
+
+fn createNavigationTestDb(count: usize) !sqlite.Db {
+    var db = try sqlite.Db.init(.{
+        .mode = .Memory,
+        .open_flags = .{ .write = true, .create = true },
+    });
+    errdefer db.deinit();
+    try db.exec(
+        \\CREATE TABLE history (
+        \\  id INTEGER PRIMARY KEY, cmd TEXT, cwd TEXT, exit_code INTEGER,
+        \\  duration_ms INTEGER, timestamp INTEGER
+        \\)
+    , .{}, .{});
+    try db.exec(
+        \\WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i < ?)
+        \\INSERT INTO history SELECT i, printf('cmd %06d',i),
+        \\  CASE WHEN i % 2 = 0 THEN 'local' ELSE 'other' END, 0, 0, i FROM n
+    , .{}, .{@as(i64, @intCast(count))});
+    return db;
+}
+
+test "search pages retain full counts beyond the former 50000 result limit" {
+    const allocator = std.testing.allocator;
+    var db = try createNavigationTestDb(50100);
+    defer db.deinit();
+    var state = search_logic.SearchState.init(allocator);
+    defer state.deinit(allocator);
+    try state.query.appendSlice(allocator, "cmd ");
+    try state.loadPage(&db, 100, 0, true);
+    try std.testing.expectEqual(@as(usize, 50100), state.total_count);
+    try std.testing.expectEqual(@as(usize, 100), state.results.len);
+    try state.loadPage(&db, 100, 50099, false);
+    try std.testing.expectEqual(@as(usize, 50100), state.total_count);
+    try std.testing.expectEqual(@as(usize, 1), state.results.len);
+    try std.testing.expectEqualStrings("cmd 000001", state.results[0].cmd);
+    try std.testing.expectEqual(@as(i64, 1), (try navigation.getSelectedCommandEntry(state.results, 50099, state.results_offset)).?.id);
+    try std.testing.expect(try navigation.getSelectedCommandEntry(state.results, 50098, state.results_offset) == null);
+}
+
+test "directory filtering survives query clearing and updates the complete browsing count" {
+    const allocator = std.testing.allocator;
+    var environ_map: std.process.Environ.Map = .init(allocator);
+    defer environ_map.deinit();
+    var db = try createNavigationTestDb(600);
+    defer db.deinit();
+    var app: TuiApp = undefined;
+    try app.init(allocator, &db, "local", std.testing.io, &environ_map);
+    defer app.deinit();
+    try app.handleEvent(.{ .key_press = .{ .codepoint = 'f', .mods = .{ .ctrl = true } } });
+    try app.flushSearch();
+    try std.testing.expectEqual(@as(usize, 300), app.scroll_state.total_count);
+    for (app.search_state.results) |row| try std.testing.expectEqualStrings("local", row.cwd);
+    try app.handleEvent(.{ .key_press = .{ .codepoint = 'c', .text = "cmd" } });
+    try app.flushSearch();
+    try app.handleEvent(.{ .key_press = .{ .codepoint = 'u', .mods = .{ .ctrl = true } } });
+    try app.flushSearch();
+    try std.testing.expect(!app.isSearching());
+    try std.testing.expectEqual(@as(usize, 300), app.scroll_state.total_count);
+    try app.handleEvent(.{ .key_press = .{ .codepoint = vaxis.Key.end } });
+    try std.testing.expectEqual(@as(usize, 299), app.selected_index);
+    try std.testing.expectEqual(@as(i64, 2), (try navigation.getSelectedCommandEntry(app.search_state.results, app.selected_index, app.search_state.results_offset)).?.id);
+    try app.handleEvent(.{ .key_press = .{ .codepoint = 'f', .mods = .{ .ctrl = true } } });
+    try app.flushSearch();
+    try std.testing.expectEqual(@as(usize, 600), app.scroll_state.total_count);
+}
+
+test "search deduplicates commands using the newest matching directory entry" {
+    const allocator = std.testing.allocator;
+    var db = try createNavigationTestDb(1);
+    defer db.deinit();
+    try db.exec("INSERT INTO history VALUES(2,'duplicate','local',0,0,20)", .{}, .{});
+    try db.exec("INSERT INTO history VALUES(3,'duplicate','other',1,0,30)", .{}, .{});
+    var state = search_logic.SearchState.init(allocator);
+    defer state.deinit(allocator);
+    try state.query.appendSlice(allocator, "duplicate");
+    try state.loadPage(&db, 100, 0, true);
+    try std.testing.expectEqual(@as(usize, 1), state.total_count);
+    try std.testing.expectEqual(@as(i64, 3), state.results[0].id);
+    state.filter_state = directory_filter.DirectoryFilterState.init("local");
+    state.filter_state.toggleMode();
+    try state.loadPage(&db, 100, 0, true);
+    try std.testing.expectEqual(@as(usize, 1), state.total_count);
+    try std.testing.expectEqual(@as(i64, 2), state.results[0].id);
+    try state.query.appendSlice(allocator, " no match");
+    try state.loadPage(&db, 100, 0, true);
+    try std.testing.expectEqual(@as(usize, 0), state.total_count);
+    try std.testing.expectEqual(@as(usize, 0), state.results.len);
+}
+
+test "large viewports and page navigation load complete pages" {
+    const allocator = std.testing.allocator;
+    var environ_map: std.process.Environ.Map = .init(allocator);
+    defer environ_map.deinit();
+    var db = try createNavigationTestDb(1000);
+    defer db.deinit();
+    var app: TuiApp = undefined;
+    try app.init(allocator, &db, null, std.testing.io, &environ_map);
+    defer app.deinit();
+    var size = try app.tty.getWinsize();
+    size.cols = 80;
+    size.rows = 240;
+    try app.handleEvent(.{ .winsize = size });
+    try std.testing.expectEqual(@as(usize, 237), app.search_state.results.len);
+    try app.handleEvent(.{ .key_press = .{ .codepoint = vaxis.Key.page_down } });
+    try std.testing.expectEqual(@as(i64, 763), (try navigation.getSelectedCommandEntry(app.search_state.results, app.selected_index, app.search_state.results_offset)).?.id);
+    try app.handleEvent(.{ .key_press = .{ .codepoint = vaxis.Key.end } });
+    try std.testing.expectEqual(@as(i64, 1), (try navigation.getSelectedCommandEntry(app.search_state.results, app.selected_index, app.search_state.results_offset)).?.id);
+    try app.handleEvent(.{ .key_press = .{ .codepoint = vaxis.Key.page_up } });
+    try std.testing.expectEqual(@as(i64, 238), (try navigation.getSelectedCommandEntry(app.search_state.results, app.selected_index, app.search_state.results_offset)).?.id);
+    try app.handleEvent(.{ .key_press = .{ .codepoint = vaxis.Key.home } });
+    try std.testing.expectEqual(@as(i64, 1000), (try navigation.getSelectedCommandEntry(app.search_state.results, app.selected_index, app.search_state.results_offset)).?.id);
+}
+
+test "queued edits coalesce but Enter selects from the updated query" {
+    const allocator = std.testing.allocator;
+    var environ_map: std.process.Environ.Map = .init(allocator);
+    defer environ_map.deinit();
+    var db = try createNavigationTestDb(300);
+    defer db.deinit();
+    var app: TuiApp = undefined;
+    try app.init(allocator, &db, null, std.testing.io, &environ_map);
+    defer app.deinit();
+    defer if (app.selected_command) |cmd| allocator.free(cmd);
+    try app.handleEvent(.{ .key_press = .{ .codepoint = '0', .text = "000" } });
+    try app.handleEvent(.{ .key_press = .{ .codepoint = '0', .text = "001" } });
+    try std.testing.expect(app.search_dirty);
+    try std.testing.expectEqual(@as(usize, 300), app.scroll_state.total_count);
+    try app.handleEvent(.{ .key_press = .{ .codepoint = vaxis.Key.enter } });
+    try std.testing.expect(app.should_quit);
+    try std.testing.expectEqualStrings("cmd 000001", app.selected_command.?);
+}
+
+test "repeated result pages reuse bounded memory and preserve literal LIKE characters" {
+    const allocator = std.testing.allocator;
+    var db = try createNavigationTestDb(300);
+    defer db.deinit();
+    try db.exec("INSERT INTO history VALUES(301,'literal %_\\','local',0,0,301)", .{}, .{});
+    var state = search_logic.SearchState.init(allocator);
+    defer state.deinit(allocator);
+    try state.query.appendSlice(allocator, "%_\\");
+    try state.loadPage(&db, 100, 0, true);
+    try std.testing.expectEqual(@as(usize, 1), state.total_count);
+    state.query.clearRetainingCapacity();
+    try state.query.appendSlice(allocator, "cmd");
+    try state.loadPage(&db, 100, 0, true);
+    // Warm up the retained arena; repeated pages must not accumulate old results.
+    try state.loadPage(&db, 100, 0, true);
+    const capacity = state.results_arena.queryCapacity();
+    for (0..20) |i| {
+        try state.loadPage(&db, 100, (i % 3) * 100, true);
+        try std.testing.expect(state.results_arena.queryCapacity() <= capacity);
+        try std.testing.expectEqual(@as(usize, 300), state.total_count);
     }
 }

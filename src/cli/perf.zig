@@ -29,16 +29,14 @@ pub fn run(db: *sqlite.Db, cwd_param: ?[]const u8, format_param: []const u8, thr
     defer if (cwd_param == null) allocator.free(cwd);
 
     const metrics = try getPerfMetrics(db, cwd, allocator);
+    defer allocator.free(metrics.last_cmd);
 
     // Print metrics before freeing to use the data
     if (std.mem.eql(u8, format_param, "json")) {
-        try printJson(metrics, allocator);
+        try printJson(metrics, allocator, io);
     } else {
         try printText(metrics, threshold_param, allocator);
     }
-
-    // Free the duplicated command string after using metrics
-    allocator.free(metrics.last_cmd);
 }
 
 /// Get performance metrics for a directory
@@ -46,11 +44,11 @@ fn getPerfMetrics(db: *sqlite.Db, cwd: []const u8, allocator: std.mem.Allocator)
     const query =
         \\SELECT
         \\  AVG(duration_ms) as avg_duration,
-        \\  SUM(CASE WHEN exit_code = 0 THEN 1 ELSE 0 END) as success,
+        \\  COALESCE(SUM(CASE WHEN exit_code = 0 THEN 1 ELSE 0 END), 0) as success,
         \\  COUNT(*) as total,
-        \\  (SELECT duration_ms FROM history WHERE cwd = ? ORDER BY timestamp DESC LIMIT 1) as last_duration,
-        \\  (SELECT exit_code FROM history WHERE cwd = ? ORDER BY timestamp DESC LIMIT 1) as last_exit_code,
-        \\  (SELECT cmd FROM history WHERE cwd = ? ORDER BY timestamp DESC LIMIT 1) as last_cmd
+        \\  (SELECT duration_ms FROM history WHERE cwd = ? ORDER BY timestamp DESC, id DESC LIMIT 1) as last_duration,
+        \\  (SELECT exit_code FROM history WHERE cwd = ? ORDER BY timestamp DESC, id DESC LIMIT 1) as last_exit_code,
+        \\  (SELECT cmd FROM history WHERE cwd = ? ORDER BY timestamp DESC, id DESC LIMIT 1) as last_cmd
         \\FROM history
         \\WHERE cwd = ?
     ;
@@ -133,19 +131,12 @@ fn printText(metrics: PerfMetrics, threshold: i64, allocator: std.mem.Allocator)
 }
 
 /// Print metrics in JSON format
-fn printJson(metrics: PerfMetrics, _: std.mem.Allocator) !void {
-    var buffer: [512]u8 = undefined;
-    const json = std.fmt.bufPrintZ(&buffer,
-        \\{{"avg_duration_ms":{d:.1},"last_duration_ms":{d},"last_cmd":"{s}","success_rate":{d:.1},"total_commands":{d},"last_exit_code":{d}}}
-    , .{
-        metrics.avg_duration_ms,
-        metrics.last_duration_ms,
-        metrics.last_cmd,
-        metrics.success_rate,
-        metrics.total_commands,
-        metrics.last_exit_code,
-    }) catch return error.BufferTooSmall;
-    std.debug.print("{s}\n", .{json});
+fn printJson(metrics: PerfMetrics, allocator: std.mem.Allocator, io: std.Io) !void {
+    const json = try std.json.Stringify.valueAlloc(allocator, metrics, .{});
+    defer allocator.free(json);
+    const stdout = std.Io.File.stdout();
+    try stdout.writeStreamingAll(io, json);
+    try stdout.writeStreamingAll(io, "\n");
 }
 
 /// Format duration in human-readable format

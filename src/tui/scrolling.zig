@@ -35,7 +35,7 @@ pub fn fetchHistoryPage(
     const query =
         \\SELECT id, cmd, cwd, exit_code, duration_ms, timestamp 
         \\FROM history 
-        \\ORDER BY timestamp DESC 
+        \\ORDER BY timestamp DESC, id DESC
         \\LIMIT ? OFFSET ?
     ;
     var stmt = try db.prepare(query);
@@ -55,29 +55,22 @@ pub fn fetchHistoryPage(
         @as(i64, @intCast(offset)),
     });
 
-    // Use a fixed buffer for collecting entries then copy to final slice
-    var temp_entries: [200]HistoryEntry = undefined;
-    var count: usize = 0;
-
-    while (count < 200) {
-        const row = (try iter.nextAlloc(allocator, .{})) orelse break;
-
-        temp_entries[count] = .{
-            .id = row.id,
-            .cmd = row.cmd,
-            .cwd = row.cwd,
-            .exit_code = row.exit_code,
-            .duration_ms = row.duration_ms,
-            .timestamp = row.timestamp,
-        };
-        count += 1;
+    var entries: std.ArrayListUnmanaged(HistoryEntry) = .empty;
+    errdefer {
+        for (entries.items) |entry| {
+            allocator.free(entry.cmd);
+            allocator.free(entry.cwd);
+        }
+        entries.deinit(allocator);
     }
-
-    // Allocate exact size and copy
-    const entries = try allocator.alloc(HistoryEntry, count);
-    @memcpy(entries, temp_entries[0..count]);
-
-    return entries;
+    while (try iter.nextAlloc(allocator, .{})) |row| {
+        errdefer {
+            allocator.free(row.cmd);
+            allocator.free(row.cwd);
+        }
+        try entries.append(allocator, row);
+    }
+    return entries.toOwnedSlice(allocator);
 }
 
 /// Get total count of history entries

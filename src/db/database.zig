@@ -72,6 +72,7 @@ pub fn initDb(path: [:0]const u8) !sqlite.Db {
         },
         .threading_mode = .MultiThread,
     });
+    errdefer db.deinit();
 
     // ── PRAGMAs ───────────────────────────────────────────────────────────────
     try rawExec(&db, "PRAGMA journal_mode=WAL");
@@ -79,8 +80,7 @@ pub fn initDb(path: [:0]const u8) !sqlite.Db {
     try rawExec(&db, "PRAGMA busy_timeout=1000");
 
     // ── Schema (CREATE TABLE / INDEX / FTS / TRIGGERS) ────────────────────────
-    // Each statement is executed separately so that pre-existing objects
-    // (SQLiteError = "already exists") are silently ignored.
+    // IF NOT EXISTS handles existing objects; genuine failures are propagated.
     const ddl = [_][:0]const u8{
         \\CREATE TABLE IF NOT EXISTS history (
         \\    id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,6 +94,8 @@ pub fn initDb(path: [:0]const u8) !sqlite.Db {
         \\)
         ,
         "CREATE INDEX IF NOT EXISTS idx_cmd_prefix ON history(cmd COLLATE NOCASE)",
+        "CREATE INDEX IF NOT EXISTS idx_history_time ON history(timestamp DESC, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_history_cwd_time ON history(cwd, timestamp DESC, id DESC)",
         "CREATE VIRTUAL TABLE IF NOT EXISTS history_fts USING fts5(cmd, content='history', content_rowid='id')",
         \\CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
         \\  INSERT INTO history_fts(rowid, cmd) VALUES (new.id, new.cmd);
@@ -112,14 +114,12 @@ pub fn initDb(path: [:0]const u8) !sqlite.Db {
         ,
     };
     for (ddl) |stmt| {
-        rawExec(&db, stmt) catch {}; // ignore "already exists"
+        try rawExec(&db, stmt);
     }
 
     // ── FTS5 rebuild check ────────────────────────────────────────────────────
-    const fts = try rawQueryPair(&db,
-        "SELECT count(*) AS c, COALESCE(MAX(rowid),0) AS m FROM history_fts");
-    const hist = try rawQueryPair(&db,
-        "SELECT count(*) AS c, COALESCE(MAX(id),0) AS m FROM history");
+    const fts = try rawQueryPair(&db, "SELECT count(*) AS c, COALESCE(MAX(rowid),0) AS m FROM history_fts");
+    const hist = try rawQueryPair(&db, "SELECT count(*) AS c, COALESCE(MAX(id),0) AS m FROM history");
 
     if (hist.c != fts.c or hist.m != fts.m) {
         try rawExec(&db, "INSERT INTO history_fts(history_fts) VALUES('rebuild')");

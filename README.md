@@ -26,7 +26,7 @@
 
 ### 🔍 **Interactive Search**
 
-- **Built-in TUI** with real-time fuzzy search (uses LIKE queries for reliability)
+- **Built-in TUI** with real-time substring search (uses LIKE queries for reliability)
 - **Virtual scrolling** handles massive histories efficiently
 - **Multi-select** commands for piped execution (up to 5 commands)
 - **Vim-style keybindings** (j/k for navigation, Ctrl+K/J for page navigation)
@@ -236,12 +236,14 @@ Launch the interactive TUI search interface.
 
 **Features:**
 
-- Real-time fuzzy search as you type
-- Virtual scrolling for large histories (10,000+ commands)
+- Real-time substring search as you type
+- Paged results with full match counts and no fixed result limit
+- Reusable result memory and coalesced queued edits
+- Directory filtering that applies to browsing and survives clearing the query
 - Multi-select support (up to 5 commands)
 - Keyboard navigation (↑/↓, Page Up/Down, Ctrl+K/J)
 - Selected command copied to clipboard
-- Sub-5ms query performance
+- Indexed timestamp ordering for recent-history browsing
 
 **Keybindings:**
 
@@ -255,7 +257,7 @@ Launch the interactive TUI search interface.
 | **Right Arrow** | Accept current prediction suggestion |
 | **Ctrl+F** (in terminal) | Cycle through predictions (if multiple) |
 | **Ctrl+R** | Open Interactive TUI search |
-| **Ctrl+F** (in TUI) | Open fzf-based fuzzy search |
+| **Ctrl+F** (in TUI) | Toggle global/current-directory filtering |
 | **j/k** or **↑/↓** (in TUI)| Navigate search results |
 | **Enter** (in TUI) | Accept selection and copy to clipboard |
 | **Esc** (in TUI) | Close search without selection |
@@ -276,16 +278,30 @@ Import existing PowerShell history.
 # Import from default PowerShell history location
 zigstory import
 
-# Import from custom file
-zigstory import --file "C:\custom_history.txt"
+# Import a JSON batch
+zigstory import --file "C:\history.json"
 ```
 
 **Features:**
 
-- Automatic duplicate detection
+- Duplicate detection for PSReadLine history
 - Progress tracking during import
 - Handles large history files (10,000+ commands)
-- Preserves command timestamps
+- Estimates timestamps for PSReadLine history; JSON batches use import time
+
+Single-command recording and both import paths update history, command statistics,
+and new-entry ranks in one transaction. JSON imports require a nonempty `cmd`;
+`cwd`, `exit_code`, and `duration_ms` default to the current directory, 0, and 0.
+Malformed or out-of-range fields reject the batch rather than skipping entries.
+
+#### `zigstory perf`
+
+Display duration and success-rate metrics for a directory. JSON is written to
+stdout with complete, correctly escaped commands, including multiline text.
+
+```powershell
+zigstory perf --cwd "C:\repo" --format json | ConvertFrom-Json
+```
 
 #### `zigstory list`
 
@@ -329,6 +345,7 @@ zigstory recalc-rank
 - Uses formula: `rank = (frequency * 2.0) + (100.0 / days_since_last_use)`
 - Progress tracking for large histories
 - Batch execution for performance
+- Rebuilds incomplete command statistics and handles gaps in history IDs
 
 #### `zigstory help`
 
@@ -367,7 +384,7 @@ See [docs/plan.md](docs/plan.md) for the detailed development roadmap.
 
 **Phase 4 Complete** - The TUI search interface is fully functional with:
 
-- ✅ Real-time fuzzy search
+- ✅ Real-time substring search
 - ✅ Virtual scrolling for large datasets
 - ✅ Keyboard navigation with vim-style bindings
 - ✅ Clipboard integration
@@ -382,7 +399,7 @@ See [docs/plan.md](docs/plan.md) for the detailed development roadmap.
 - ✅ **fzf Integration**: `zigstory fzf` command with Ctrl+F binding
 - ✅ **Performance**: Recalculation of 10k entries in <1s
 - ⏳ **Predictor Integration**: Update predictor to use rank-based sorting (planned)
-- ⏳ **Directory Filtering**: Context-aware search in TUI (planned)
+- ✅ **Directory Filtering**: Context-aware browsing and search in TUI
 
 ## 🤝 Contributing
 
@@ -444,6 +461,10 @@ CREATE INDEX idx_cmd_prefix ON history(cmd COLLATE NOCASE);
 
 -- Index for rank-based sorting
 CREATE INDEX idx_rank ON history(rank DESC, timestamp DESC);
+
+-- Indexes for recent history and directory-scoped browsing/metrics
+CREATE INDEX idx_history_time ON history(timestamp DESC, id DESC);
+CREATE INDEX idx_history_cwd_time ON history(cwd, timestamp DESC, id DESC);
 
 -- FTS5 virtual table for full-text search
 CREATE VIRTUAL TABLE history_fts USING fts5(cmd, content='history', content_rowid='id');

@@ -58,8 +58,25 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    const test_step = b.step("test-tui", "Run TUI startup regression tests");
+    const test_step = b.step("test-tui", "Run TUI startup, search, and navigation regressions");
     test_step.dependOn(&b.addRunArtifact(tui_tests).step);
+
+    const core_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/regression_tests.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "sqlite", .module = sqlite_mod },
+                .{ .name = "zigstory", .module = mod },
+            },
+        }),
+    });
+    const core_test_step = b.step("test-core", "Run database and import regressions");
+    core_test_step.dependOn(&b.addRunArtifact(core_tests).step);
+    const all_tests = b.step("test", "Run core and TUI regression tests");
+    all_tests.dependOn(test_step);
+    all_tests.dependOn(core_test_step);
 
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);

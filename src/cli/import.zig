@@ -1,7 +1,7 @@
 const std = @import("std");
 const sqlite = @import("sqlite");
 const zigstory = @import("zigstory");
-const ranking = zigstory.ranking;
+const record = zigstory.record;
 
 /// Represents a parsed history entry
 const HistoryEntry = struct {
@@ -154,9 +154,9 @@ pub fn isDuplicate(db: *sqlite.Db, cmd: []const u8, cwd: []const u8, timestamp: 
 /// JSON entry structure for batch import
 const JsonEntry = struct {
     cmd: []const u8,
-    cwd: []const u8,
-    exit_code: i32,
-    duration_ms: i64,
+    cwd: ?[]const u8 = null,
+    exit_code: i32 = 0,
+    duration_ms: i64 = 0,
 };
 
 /// Import from JSON file (for batch writes from PowerShell)
@@ -184,14 +184,10 @@ pub fn importFromFile(
     }
 
     // Parse JSON
-    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_data, .{ .ignore_unknown_fields = true });
+    const parsed = try std.json.parseFromSlice([]JsonEntry, allocator, json_data, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 
-    if (parsed.value != std.json.Value.array) {
-        return error.InvalidJsonFormat;
-    }
-
-    const array = parsed.value.array;
+    const entries = parsed.value;
 
     // Prepare session ID and hostname for all entries
     const add_mod = @import("add.zig");
@@ -204,77 +200,31 @@ pub fn importFromFile(
     // Batch insert
     var imported: usize = 0;
 
-    // Use transaction for better performance
-    {
-        var begin_stmt = try db.prepare("BEGIN TRANSACTION");
-        defer begin_stmt.deinit();
-        try begin_stmt.exec(.{}, .{});
-    }
-    errdefer {
-        var rollback_stmt = db.prepare("ROLLBACK") catch unreachable;
-        defer rollback_stmt.deinit();
-        rollback_stmt.exec(.{}, .{}) catch {};
-    }
-
-    const query =
-        \\INSERT INTO history (cmd, cwd, exit_code, duration_ms, session_id, hostname, timestamp, cmd_hash)
-        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ;
-
-    var stmt = try db.prepare(query);
-    defer stmt.deinit();
+    var writer = try record.Writer.init(db);
+    defer writer.deinit();
+    try db.exec("BEGIN IMMEDIATE", .{}, .{});
+    errdefer record.rollback(db);
 
     const timestamp = std.Io.Timestamp.now(io, .real).toSeconds();
 
-    for (array.items) |item| {
-        if (item != .object) {
-            continue;
-        }
-
-        const obj = item.object;
-
-        // Extract fields
-        const cmd = obj.get("cmd") orelse continue;
-        const cmd_str = if (cmd == .string) cmd.string else continue;
-
-        const cwd_obj = obj.get("cwd");
-        const cwd_str = if (cwd_obj) |c| (if (c == .string) c.string else null) else null;
-        const cwd_final = if (cwd_str) |s| s else default_cwd;
-
-        const exit_code_obj = obj.get("exit_code");
-        const exit_code = if (exit_code_obj) |e| (if (e == .integer) @as(i32, @intCast(e.integer)) else 0) else 0;
-
-        const duration_ms_obj = obj.get("duration_ms");
-        const duration_ms = if (duration_ms_obj) |d| (if (d == .integer) @as(i64, @intCast(d.integer)) else 0) else 0;
-
-        // Compute command hash
-        const cmd_hash = try ranking.getCommandHash(cmd_str, allocator);
-        defer allocator.free(cmd_hash);
-
-        // Insert into database
-        try stmt.exec(.{}, .{
-            .cmd = cmd_str,
-            .cwd = cwd_final,
-            .exit_code = exit_code,
-            .duration_ms = duration_ms,
+    for (entries) |entry| {
+        try writer.record(.{
+            .cmd = entry.cmd,
+            .cwd = entry.cwd orelse default_cwd,
+            .exit_code = entry.exit_code,
+            .duration_ms = entry.duration_ms,
             .session_id = session_id,
             .hostname = hostname,
             .timestamp = timestamp,
-            .cmd_hash = cmd_hash,
-        });
-        stmt.reset();
+        }, allocator, timestamp);
         imported += 1;
     }
 
     // Commit transaction
-    {
-        var commit_stmt = try db.prepare("COMMIT");
-        defer commit_stmt.deinit();
-        try commit_stmt.exec(.{}, .{});
-    }
+    try db.exec("COMMIT", .{}, .{});
 
     return .{
-        .total = array.items.len,
+        .total = entries.len,
         .imported = imported,
     };
 }
@@ -310,6 +260,10 @@ pub fn importHistory(
     const parsed = try parseHistoryFile(allocator, io, file);
     const entries = parsed.entries;
     const count = parsed.count;
+    defer {
+        for (entries) |entry| allocator.free(entry.cmd);
+        allocator.free(entries);
+    }
 
     std.debug.print("Found {} commands in history file\n", .{count});
 
@@ -318,13 +272,8 @@ pub fn importHistory(
     var skipped: usize = 0;
 
     // Use batch insertion for better performance
-    const query =
-        \\INSERT INTO history (cmd, cwd, exit_code, duration_ms, session_id, hostname, timestamp, cmd_hash)
-        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ;
-
-    var stmt = try db.prepare(query);
-    defer stmt.deinit();
+    var writer = try record.Writer.init(db);
+    defer writer.deinit();
 
     // Generate a single session ID for all imported commands
     const session_id = "imported-session";
@@ -338,18 +287,17 @@ pub fn importHistory(
 
     // Display progress
     const progress_interval = if (count / 20 > 1) count / 20 else 1; // Update progress ~20 times
+    try db.exec("BEGIN IMMEDIATE", .{}, .{});
+    errdefer record.rollback(db);
+    const now = std.Io.Timestamp.now(io, .real).toSeconds();
 
     for (entries[0..count], 0..) |entry, index| {
         // Check for duplicates
         if (try isDuplicate(db, entry.cmd, cwd, entry.timestamp)) {
             skipped += 1;
         } else {
-            // Compute command hash
-            const cmd_hash = try ranking.getCommandHash(entry.cmd, allocator);
-            defer allocator.free(cmd_hash);
-
             // Insert entry
-            try stmt.exec(.{}, .{
+            try writer.record(.{
                 .cmd = entry.cmd,
                 .cwd = cwd,
                 .exit_code = 0, // Unknown for imported history
@@ -357,9 +305,7 @@ pub fn importHistory(
                 .session_id = session_id,
                 .hostname = hostname,
                 .timestamp = entry.timestamp,
-                .cmd_hash = cmd_hash,
-            });
-            stmt.reset(); // Reset statement for next use
+            }, allocator, now);
             imported += 1;
         }
 
@@ -378,11 +324,7 @@ pub fn importHistory(
 
     std.debug.print("\n", .{}); // New line after progress
 
-    // Free all allocated commands and entries array
-    for (entries[0..count]) |entry| {
-        allocator.free(entry.cmd);
-    }
-    allocator.free(entries);
+    try db.exec("COMMIT", .{}, .{});
 
     return .{
         .total = count,

@@ -40,9 +40,12 @@ function Global:ZigstoryRecordCommand($cmd, $cwd, $exitCode, $duration) {
 
     # Build temp JSON
     $tempFile = [System.IO.Path]::GetTempFileName()
-    $cmdEsc = $cmd -replace '\\', '\\' -replace '"', '\"'
-    $cwdEsc = $cwd -replace '\\', '\\'
-    $json = "[{`"cmd`":`"$cmdEsc`",`"cwd`":`"$cwdEsc`",`"exit_code`":$exitCode,`"duration_ms`":$duration}]"
+    $json = ConvertTo-Json -InputObject @(@{
+        cmd = $cmd
+        cwd = $cwd
+        exit_code = $exitCode
+        duration_ms = $duration
+    }) -Compress
 
     # Write to temp file
     $utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -202,4 +205,3 @@ if (Test-Path $Global:ZigstoryBin) {
 
     Write-Host "Type 'zs' or press 'Ctrl+R' for TUI search, 'Ctrl+F' for fzf search" -ForegroundColor Cyan
 }
-

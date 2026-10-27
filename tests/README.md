@@ -1,6 +1,7 @@
 # zigstory — Functional Tests
 
-This folder contains the PowerShell 7 functional test suite for zigstory.
+This folder contains the PowerShell 7 functional and JSON regression suites for
+zigstory. The runner executes both; Zig core/TUI tests run separately.
 
 ## Prerequisites
 
@@ -29,14 +30,25 @@ pwsh -NoProfile -File tests/run_tests.ps1 -KeepDb
 
 ## Test Groups
 
-TUI startup regressions run separately with Zig 0.16:
+Core and TUI regressions run with Zig 0.16:
 
 ```powershell
+zig build test
+zig build test-core
 zig build test-tui
+zig build test -Doptimize=ReleaseFast
+
+# After building the executable
+pwsh -NoProfile -File tests\json_regressions.ps1
 ```
 
-These check that terminal resources retain app-owned pointers and that the first
-frame is rendered at the terminal's current size without input or resize events.
+Core tests check index selection, atomic recording/imports, validation, recency,
+statistics repair, and rank recalculation with sparse IDs. TUI tests cover startup
+resource ownership/first-frame rendering, more than 50,000 matches, directory
+filtering, queued edits, page navigation, large viewports, and bounded result
+memory. JSON regressions exercise the actual PowerShell recording serializer and
+CLI output, including long, quoted, multiline, and Unicode commands. They extract
+only the recording function and mock process launch without installing hooks.
 
 | ID | Area | What is tested |
 |----|------|----------------|

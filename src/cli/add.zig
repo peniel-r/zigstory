@@ -1,7 +1,7 @@
 const std = @import("std");
 const sqlite = @import("sqlite");
 const zigstory = @import("zigstory");
-const ranking = zigstory.ranking;
+const record = zigstory.record;
 
 /// Parameters for the add command
 pub const AddParams = struct {
@@ -93,48 +93,19 @@ pub fn addCommand(db: *sqlite.Db, params: AddParams, allocator: std.mem.Allocato
         try getHostname(allocator);
     defer allocator.free(hostname);
 
-    // Compute command hash before inserting
-    const cmd_hash = try ranking.getCommandHash(params.cmd, allocator);
-    defer allocator.free(cmd_hash);
-
-    // Insert into database
-    const query =
-        \\INSERT INTO history (cmd, cwd, exit_code, duration_ms, session_id, hostname, cmd_hash)
-        \\VALUES (?, ?, ?, ?, ?, ?, ?)
-    ;
-
-    var stmt = try db.prepare(query);
-    defer stmt.deinit();
-
-    try stmt.exec(.{}, .{
+    var writer = try record.Writer.init(db);
+    defer writer.deinit();
+    try db.exec("BEGIN IMMEDIATE", .{}, .{});
+    errdefer record.rollback(db);
+    const now = std.Io.Timestamp.now(io, .real).toSeconds();
+    try writer.record(.{
         .cmd = params.cmd,
         .cwd = params.cwd,
         .exit_code = params.exit_code,
         .duration_ms = params.duration_ms,
         .session_id = session_id,
         .hostname = hostname,
-        .cmd_hash = cmd_hash,
-    });
-
-    // Update ranking stats
-    // Get last insert rowid using SQL
-    var id_stmt = try db.prepare("SELECT last_insert_rowid() AS id");
-    defer id_stmt.deinit();
-
-    // Result struct
-    const Result = struct { id: i64 };
-    var iter = try id_stmt.iterator(Result, .{});
-
-    if (try iter.next(.{})) |row| {
-        const history_id = row.id;
-        const frecency_config = ranking.FrecencyConfig{};
-        // std.time.timestamp() removed in Zig 0.16 – use Io.Timestamp.
-        const current_time = std.Io.Timestamp.now(io, .real).toSeconds();
-
-        // Update command stats (frequency, last_used)
-        try ranking.updateCommandStats(db, params.cmd, cmd_hash, current_time);
-
-        // Calculate and update rank for this entry
-        try ranking.updateHistoryRank(db, history_id, cmd_hash, frecency_config, io);
-    }
+        .timestamp = now,
+    }, allocator, now);
+    try db.exec("COMMIT", .{}, .{});
 }
