@@ -29,7 +29,7 @@ function Assert-ZigstoryUpgradeIdle {
     }
 }
 
-function Invoke-ZigstoryUpgradeCommand([string]$Path, [string[]]$Arguments) {
+function Invoke-ZigstoryUpgradeCommand([string]$Path, [string[]]$Arguments, [int]$TimeoutSeconds = 30, [hashtable]$Environment = @{}) {
     $process = [Diagnostics.Process]::new()
     try {
         $process.StartInfo.FileName = $Path
@@ -38,13 +38,14 @@ function Invoke-ZigstoryUpgradeCommand([string]$Path, [string[]]$Arguments) {
         $process.StartInfo.RedirectStandardOutput = $true
         $process.StartInfo.RedirectStandardError = $true
         foreach ($argument in $Arguments) { $process.StartInfo.ArgumentList.Add($argument) }
+        foreach ($name in $Environment.Keys) { $process.StartInfo.Environment[$name] = $Environment[$name] }
         if (-not $process.Start()) { throw "Failed to start $Path" }
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit(30000)) {
-            Stop-Process -Id $process.Id -Force
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            $process.Kill($true)
             $process.WaitForExit()
-            throw "Validation timed out after 30 seconds: $Path"
+            throw "Command timed out after $TimeoutSeconds seconds: $Path"
         }
         return [pscustomobject]@{
             ExitCode = $process.ExitCode
@@ -52,6 +53,49 @@ function Invoke-ZigstoryUpgradeCommand([string]$Path, [string[]]$Arguments) {
             ErrorOutput = $stderr.GetAwaiter().GetResult()
         }
     } finally { $process.Dispose() }
+}
+
+function Publish-ZigstoryUpgradePredictor([string]$RepositoryRoot, [string]$Destination) {
+    $dotnet = Join-Path $env:USERPROFILE 'scoop\apps\dotnet-sdk\current\dotnet.exe'
+    if (-not (Test-Path -LiteralPath $dotnet -PathType Leaf)) {
+        $dotnet = (Get-Command dotnet.exe -ErrorAction Stop).Source
+    }
+    $root = Split-Path $dotnet
+    $result = Invoke-ZigstoryUpgradeCommand $dotnet @(
+        'publish', (Join-Path $RepositoryRoot 'src\predictor\zigstoryPredictor.csproj'),
+        '-c', 'Release', '-r', 'win-x64', '--self-contained', 'false', '-o', $Destination
+    ) -TimeoutSeconds 180 -Environment @{ DOTNET_ROOT = $root; DOTNET_ROOT_X64 = $root }
+    if ($result.ExitCode -ne 0) { throw "Predictor publish failed:`n$($result.Output)`n$($result.ErrorOutput)" }
+    foreach ($name in @('zigstoryPredictor.dll', 'Microsoft.Data.Sqlite.dll', 'e_sqlite3.dll')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $Destination $name) -PathType Leaf)) {
+            throw "Predictor publish is missing required file: $name"
+        }
+    }
+}
+
+function Test-ZigstoryUpgradePredictor([string]$Directory) {
+    $dll = (Join-Path $Directory 'zigstoryPredictor.dll').Replace("'", "''")
+    $script = @"
+`$ErrorActionPreference = 'Stop'
+Add-Type -Path '$dll'
+`$predictor = [zigstoryPredictor.ZigstoryPredictor]::new()
+try {
+    `$connection = [Microsoft.Data.Sqlite.SqliteConnection]::new('Data Source=:memory:')
+    try {
+        `$connection.Open()
+        `$command = `$connection.CreateCommand()
+        try {
+            `$command.CommandText = 'SELECT 1'
+            if (`$command.ExecuteScalar() -ne 1) { throw 'SQLite smoke test failed.' }
+        } finally { `$command.Dispose() }
+    } finally { `$connection.Dispose() }
+    [System.Management.Automation.Subsystem.SubsystemManager]::RegisterSubsystem(
+        [System.Management.Automation.Subsystem.SubsystemKind]::CommandPredictor, `$predictor)
+} finally { `$predictor.Dispose() }
+"@
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+    $result = Invoke-ZigstoryUpgradeCommand (Join-Path $PSHOME 'pwsh.exe') @('-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded)
+    if ($result.ExitCode -ne 0) { throw "Predictor validation failed: $($result.ErrorOutput)" }
 }
 
 function Test-ZigstoryUpgradeExecutable([string]$Path, [switch]$Installed) {
@@ -75,7 +119,8 @@ function Invoke-ZigstorySafeUpgrade {
         [string]$InstallExe,
         [string]$ProfileScript,
         [string]$HistoryDirectory,
-        [string]$BackupRoot
+        [string]$BackupRoot,
+        [string]$PredictorDirectory = (Join-Path $env:USERPROFILE 'Documents\PowerShell\Modules\zigstoryPredictor')
     )
     $sourceExe = Join-Path $RepositoryRoot 'zig-out\bin\zigstory.exe'
     $sourceProfile = Join-Path $RepositoryRoot 'scripts\zsprofile.ps1'
@@ -86,11 +131,11 @@ function Invoke-ZigstorySafeUpgrade {
     }
     # Keep recovery copies outside every directory that rollback can move.
     $backupPath = [IO.Path]::GetFullPath($BackupRoot).TrimEnd('\')
-    foreach ($path in @($HistoryDirectory, (Split-Path $InstallExe), (Split-Path $ProfileScript))) {
+    foreach ($path in @($HistoryDirectory, (Split-Path $InstallExe), (Split-Path $ProfileScript), $PredictorDirectory)) {
         $fullPath = [IO.Path]::GetFullPath($path).TrimEnd('\')
         if ($backupPath.Equals($fullPath, [StringComparison]::OrdinalIgnoreCase) -or
             $backupPath.StartsWith("$fullPath\", [StringComparison]::OrdinalIgnoreCase)) {
-            throw 'BackupRoot must be outside the history, executable and profile directories.'
+            throw 'BackupRoot must be outside the history, executable, profile and predictor directories.'
         }
     }
     $tokens = $null
@@ -100,11 +145,37 @@ function Invoke-ZigstorySafeUpgrade {
     Test-ZigstoryUpgradeExecutable $sourceExe
     Assert-ZigstoryUpgradeIdle
 
+    if ([AppDomain]::CurrentDomain.GetAssemblies().GetName().Name -contains 'zigstoryPredictor') {
+        throw 'Predictor is loaded in this process. Run safe-upgrade from pwsh -NoProfile.'
+    }
+    $stage = Join-Path ([IO.Path]::GetTempPath()) "zigstory-predictor-upgrade-$([Guid]::NewGuid().ToString('N'))"
+    $null = New-Item -ItemType Directory -Path $stage
+    try {
+        Write-Host 'Publishing and validating the predictor (Release, win-x64)...'
+        Publish-ZigstoryUpgradePredictor $RepositoryRoot $stage
+        Test-ZigstoryUpgradePredictor $stage
+        Invoke-ZigstoryUpgradeReplacement -SourceExe $sourceExe -SourceProfile $sourceProfile `
+            -InstallExe $InstallExe -ProfileScript $ProfileScript -HistoryDirectory $HistoryDirectory `
+            -BackupPath $backupPath -PredictorDirectory $PredictorDirectory -PublishedPredictor $stage
+    } finally { Remove-Item -LiteralPath $stage -Recurse -Force }
+}
+
+function Invoke-ZigstoryUpgradeReplacement {
+    param($SourceExe, $SourceProfile, $InstallExe, $ProfileScript, $HistoryDirectory, $BackupPath, $PredictorDirectory, $PublishedPredictor)
     $backup = Join-Path $backupPath ("upgrade-{0}-{1}" -f (Get-Date -Format 'yyyyMMdd-HHmmss'), [Guid]::NewGuid().ToString('N'))
     $failedHistory = "$HistoryDirectory.failed-$(Split-Path $backup -Leaf)"
+    $previousPredictor = "$PredictorDirectory.previous-$(Split-Path $backup -Leaf)"
+    $failedPredictor = "$PredictorDirectory.failed-$(Split-Path $backup -Leaf)"
+    $hadPredictor = Test-Path -LiteralPath $PredictorDirectory
+    if ($hadPredictor -and -not (Test-Path -LiteralPath $PredictorDirectory -PathType Container)) {
+        throw "Predictor location is not a directory: $PredictorDirectory"
+    }
     $null = New-Item -ItemType Directory -Path $backup
     Copy-Item -LiteralPath $InstallExe -Destination (Join-Path $backup 'zigstory.exe')
     Copy-Item -LiteralPath $ProfileScript -Destination (Join-Path $backup 'zsprofile.ps1')
+    if ($hadPredictor) {
+        Copy-Item -LiteralPath $PredictorDirectory -Destination (Join-Path $backup 'predictor') -Recurse -Force
+    }
     $hadHistory = Test-Path -LiteralPath $HistoryDirectory
     if ($hadHistory) {
         if (-not (Test-Path -LiteralPath $HistoryDirectory -PathType Container)) {
@@ -118,20 +189,41 @@ function Invoke-ZigstorySafeUpgrade {
         history = $HistoryDirectory
         had_history = $hadHistory
         failed_history = $failedHistory
+        predictor = $PredictorDirectory
+        had_predictor = $hadPredictor
+        previous_predictor = $previousPredictor
+        failed_predictor = $failedPredictor
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $backup 'manifest.json') -Encoding utf8
     Write-Host "Backup: $backup"
 
     # Recheck after copying the backup, before changing any installed files.
     Assert-ZigstoryUpgradeIdle
+    $predictorTouched = $false
     try {
         Copy-Item -LiteralPath $sourceExe -Destination $InstallExe -Force
         Copy-Item -LiteralPath $sourceProfile -Destination $ProfileScript -Force
+        if ($hadPredictor) {
+            Move-Item -LiteralPath $PredictorDirectory -Destination $previousPredictor
+        } else {
+            $null = New-Item -ItemType Directory -Path (Split-Path $PredictorDirectory) -Force
+        }
+        $predictorTouched = $true
+        Copy-Item -LiteralPath $PublishedPredictor -Destination $PredictorDirectory -Recurse -Force
+        foreach ($file in Get-ChildItem -LiteralPath $PublishedPredictor -File -Recurse -Force) {
+            $relative = [IO.Path]::GetRelativePath($PublishedPredictor, $file.FullName)
+            if ((Get-FileHash -LiteralPath $file.FullName).Hash -ne
+                (Get-FileHash -LiteralPath (Join-Path $PredictorDirectory $relative)).Hash) {
+                throw "Installed predictor verification failed: $relative"
+            }
+        }
         foreach ($pair in @(@($sourceExe, $InstallExe), @($sourceProfile, $ProfileScript))) {
             if ((Get-FileHash -LiteralPath $pair[0]).Hash -ne (Get-FileHash -LiteralPath $pair[1]).Hash) {
                 throw "Installed file verification failed: $($pair[1])"
             }
         }
         Test-ZigstoryUpgradeExecutable $InstallExe -Installed
+        Test-ZigstoryUpgradePredictor $PredictorDirectory
+        if ($hadPredictor) { Remove-Item -LiteralPath $previousPredictor -Recurse -Force }
         'Upgrade succeeded.' | Set-Content -LiteralPath (Join-Path $backup 'result.txt')
     } catch {
         $upgradeError = $_
@@ -162,6 +254,16 @@ function Invoke-ZigstorySafeUpgrade {
                 Copy-Item -LiteralPath (Join-Path $backup $pair[0]) -Destination $pair[1] -Force
             } catch { $rollbackErrors.Add("Restore $($pair[1]): $($_.Exception.Message)") }
         }
+        if ($predictorTouched) {
+            try {
+                if (Test-Path -LiteralPath $PredictorDirectory) {
+                    Move-Item -LiteralPath $PredictorDirectory -Destination $failedPredictor
+                }
+                if ($hadPredictor) {
+                    Copy-Item -LiteralPath (Join-Path $backup 'predictor') -Destination $PredictorDirectory -Recurse -Force
+                }
+            } catch { $rollbackErrors.Add("Restore predictor: $($_.Exception.Message)") }
+        }
         $result = "Upgrade failed: $($upgradeError.Exception.Message)"
         if ($rollbackErrors.Count -gt 0) {
             $result += "`nROLLBACK INCOMPLETE: $($rollbackErrors -join '; ')"
@@ -171,7 +273,7 @@ function Invoke-ZigstorySafeUpgrade {
         $result | Set-Content -LiteralPath (Join-Path $backup 'result.txt')
         throw "$result`nRecovery backup: $backup"
     }
-    Write-Host 'Upgrade succeeded. Restart PowerShell. Predictor DLLs were not changed.'
+    Write-Host 'Upgrade succeeded. Executable, profile and predictor updated. Restart PowerShell.'
 }
 
 if ($MyInvocation.InvocationName -ne '.') {

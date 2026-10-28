@@ -67,10 +67,18 @@ and prompt status/directory/time.
 They extract helper functions without loading the complete profile or predictor.
 
 `pwsh -NoProfile -File tests\upgrade_regressions.ps1` exercises safe upgrades on
-isolated installations with real executable/database validation. It covers
+isolated installations with real executable/database validation. It publishes the
+real predictor once and validates loading, registration and native SQLite in
+separate NoProfile processes, then reuses that publish for the isolated cases.
+It requires the .NET SDK and may restore the project's existing dependencies.
+It covers
 backups, replacement failure, post-migration failure, exact database restoration,
 pending payloads, WAL separation, no prior history, busy-shell refusal, blocked or
-incomplete rollback, and invalid source profiles. Process inventory and injected
+incomplete rollback, and invalid source profiles. Predictor cases cover complete
+module backups, stale-file removal, fresh installation, publishing/staging failures,
+partial replacement, installed-module validation failure, native dependency
+restoration, absence-preserving rollback, predictor restore failure, manifest
+destinations and temporary-directory cleanup. Process inventory and injected
 failures are mocked; no installed files or real user history are changed. This
 suite also runs through `tests\run_tests.ps1`.
 

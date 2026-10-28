@@ -17,7 +17,7 @@ build: build-zig build-plugin
 install:
     @pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 || powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1
 
-# Back up and upgrade existing executable/profile/history; roll back on failure (no rebuild)
+# Publish predictor; back up and upgrade executable/profile/module/history with rollback (CLI must be built)
 safe-upgrade:
     @pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\safe-upgrade.ps1
 

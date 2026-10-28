@@ -193,3 +193,26 @@ Formatting and tracked diff checks passed. Temporary investigation artifacts wer
 removed. Engram synchronization was attempted, but the installed tool also rejects
 the documented `sync` command. No installed files were changed, and neither the
 logging commit nor these subsequent changes were pushed.
+
+## Predictor deployment in safe-upgrade
+
+- [x] Publish Release/win-x64 predictor into fresh temporary staging with SDK-local
+  runtime selection; fail before installed changes if publishing/validation fails.
+- [x] Back up the entire installed predictor directory and replace all published
+  files, including native dependencies, without leaving stale DLLs.
+- [x] Validate loading/registration and SQLite in a separate NoProfile process;
+  include the predictor in rollback and preserve failed files for recovery.
+- [x] Extend isolated success/failure/absence regressions, update automation docs,
+  and verify the required ReleaseFast application run.
+
+No actual installation, commit or push is part of this request.
+
+Validated a real Release/win-x64 publish and clean-process predictor
+loading/registration/native SQLite. Expanded isolated regressions passed for
+success, absent modules, failed publish, invalid staging, partial DLL replacement,
+installed-module validation, predictor restoration failure, existing upgrade
+rollback cases, manifest recovery destinations and staging cleanup. Displaced
+modules are removed after successful validation; complete backup copies and
+failed replacement directories remain available for recovery after failure.
+`just safe-upgrade` dry-run and `zig build run -Doptimize=ReleaseFast` succeeded.
+The installed executable, profile, predictor and history were not modified.

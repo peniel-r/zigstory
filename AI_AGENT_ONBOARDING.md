@@ -602,6 +602,15 @@ states before their database connection. Query/filter changes must request a
 recount; paging detects committed database changes. Unicode drawing uses cell
 widths and complete graphemes, and unchanged input does not redraw.
 
+`just safe-upgrade` uses the prebuilt CLI, publishes the Release/win-x64 predictor
+into fresh temporary staging, and upgrades executable/hook/whole predictor module
+with complete backups and rollback. Close other shells and use `pwsh -NoProfile`.
+Predictor loading/registration and native SQLite are validated in child processes,
+not the upgrade process. .NET SDK 8+ is required; publishing prefers Scoop's SDK
+with matching `DOTNET_ROOT`/`DOTNET_ROOT_X64`, otherwise `dotnet.exe` from PATH.
+The installed predictor path matches the hook:
+`%USERPROFILE%\Documents\PowerShell\Modules\zigstoryPredictor`.
+
 > **Work is NOT complete until `zig build run` succeeds without errors.**
 > If the build fails, investigate, fix, and retry before marking any task done.
 

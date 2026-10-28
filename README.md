@@ -207,32 +207,50 @@ just build-zig
 just safe-upgrade
 ```
 
-`safe-upgrade` uses the already-built executable; it does not rebuild or touch
-predictor DLLs, PATH, your main PowerShell profile, or import old PSReadLine history.
-It requires an existing installed executable and `zsprofile.ps1`. It checks for
+`safe-upgrade` uses the already-built Zig executable and **publishes the predictor**
+in Release/win-x64 mode to a fresh temporary directory. It requires a .NET SDK 8+
+and an existing installed executable and `zsprofile.ps1`; an absent predictor module
+is installed automatically. It does not change PATH, your main PowerShell profile,
+or import old PSReadLine history. It checks for
 active shells/importers, validates the candidate executable and profile syntax,
-and creates a timestamped backup under `%USERPROFILE%\.zigstory-backups`.
-Backups include the installed executable, profile script, and **entire** history
-directory, including pending payloads and any WAL/SHM files.
+and loads/registers the staged predictor with a native SQLite smoke check in a
+separate NoProfile process. Publishing or staging validation failures leave installed
+files untouched. Scoop's SDK is preferred when present; `DOTNET_ROOT` and
+`DOTNET_ROOT_X64` are set for the selected publishing process to avoid mixed-runtime
+resolution. Otherwise it uses `dotnet.exe` from PATH.
+
+A timestamped backup under `%USERPROFILE%\.zigstory-backups` includes the installed
+executable, profile script, **entire predictor module directory**, and **entire**
+history directory, including pending payloads and any WAL/SHM files.
 
 The executable is replaced before the script, file hashes are checked, and a
-database/JSON smoke check performs any schema migration. Validation commands time
-out after 30 seconds. A failed upgrade returns a nonzero exit status and restores
-both installed files and the original history directory. Failed-upgrade history
+database/JSON smoke check performs any schema migration. The predictor is replaced
+as a complete directory, including native/runtime dependencies, so obsolete DLLs
+do not survive. Every published file is hash-checked and the installed module is
+validated again in a separate process. Publishing times out after 180 seconds;
+validation commands time out after 30 seconds.
+A failed upgrade returns a nonzero exit status and restores installed files,
+the original predictor directory (or its absence), and the original history.
+Failed-upgrade history
 is moved to a separate `.zigstory.failed-upgrade-*` sibling directory, not mixed
 with the restored database. Backups are retained after success or failure.
 
 If a new recording process appears or a restore fails, rollback stops or reports
 **ROLLBACK INCOMPLETE/BLOCKED**, rather than claiming success. Close all shells and
 inspect the printed backup's `result.txt` and `manifest.json`: they identify the
-original destinations and failed-history location. For manual recovery, preserve
+original destinations and failed-history/predictor locations. For manual recovery, preserve
 the current history directory separately, restore the backup's `history`
 directory in its place (or leave it absent if `had_history` is false), then restore
-`zigstory.exe` and `zsprofile.ps1` to the manifest destinations. Do not copy old
+`zigstory.exe` and `zsprofile.ps1` to the manifest destinations. Move the current
+predictor directory aside and restore the backup's `predictor` directory to the
+manifest's `predictor` destination (or leave it absent if `had_predictor` is false).
+Failed predictor replacements and, on failure, displaced originals are retained
+at the manifest's `failed_predictor`/`previous_predictor` paths when present.
+Do not copy old
 database files on top of a newer WAL/SHM set. Restart PowerShell after success.
 To choose a different backup root, invoke
 `pwsh -NoProfile -File .\scripts\safe-upgrade.ps1 -BackupRoot 'D:\zigstory-backups'`;
-it must be outside the history, executable, and profile directories.
+it must be outside the history, executable, profile and predictor directories.
 
 For a manual durable-recording upgrade instead, close existing PowerShell sessions and wait for
 background imports to finish. From `pwsh -NoProfile`, back up your installed
@@ -390,8 +408,8 @@ $env:ZIGSTORY_LOG_DIR = 'C:\local-logs\zigstory'
 
 Level names are case insensitive. Invalid levels report a diagnostic and use Error.
 Existing recording `.error` files remain independent recovery diagnostics.
-Updating all logging components requires the executable, hook and rebuilt
-predictor DLLs; `just safe-upgrade` updates only executable/hook, not predictor DLLs.
+`just safe-upgrade` updates all logging components: executable, hook and freshly
+published predictor DLLs.
 
 ### Recording recovery
 
@@ -471,10 +489,9 @@ Immediate recording is unchanged; no batching or persistent writer is introduced
 New PSReadLine imports now preserve oldest-to-newest chronology; existing imported
 timestamps are not rewritten. These optimizations add no persistent schema change.
 
-For this upgrade, rebuild and use `just safe-upgrade` from a quiet `pwsh -NoProfile`
-session for the executable and hook. Also publish and deploy the predictor DLLs
-using the manual installation steps to enable predictor logging; safe-upgrade
-does not replace predictor files. Restart PowerShell after deployment.
+For this upgrade, rebuild the Zig executable and use `just safe-upgrade` from a
+quiet `pwsh -NoProfile` session. The recipe publishes and replaces the predictor
+alongside the executable and hook. Restart PowerShell after deployment.
 
 #### `zigstory perf`
 
