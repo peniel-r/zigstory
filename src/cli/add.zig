@@ -98,7 +98,7 @@ pub fn addCommand(db: *sqlite.Db, params: AddParams, allocator: std.mem.Allocato
     try db.exec("BEGIN IMMEDIATE", .{}, .{});
     errdefer record.rollback(db);
     const now = std.Io.Timestamp.now(io, .real).toSeconds();
-    try writer.record(.{
+    _ = try writer.record(.{
         .cmd = params.cmd,
         .cwd = params.cwd,
         .exit_code = params.exit_code,

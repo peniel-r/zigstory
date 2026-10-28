@@ -191,6 +191,65 @@ After updating the TUI binary, rebuild with Zig 0.16 and copy
 `zig-out\bin\zigstory.exe` to `%APPDATA%\zigstory\zigstory.exe` if installed there;
 the profile integration prefers that installed copy over the development binary.
 
+For an existing installation, use the backup-aware automation instead of
+`just install`. Close all other PowerShell sessions and zigstory processes, open
+`pwsh -NoProfile` directly (not nested inside a still-running normal shell), and
+keep other shells closed until the upgrade finishes:
+
+```powershell
+Set-Location C:\git\zigstory
+# If needed, build first with Zig 0.16.0 on PATH:
+just build-zig
+just safe-upgrade
+```
+
+`safe-upgrade` uses the already-built executable; it does not rebuild or touch
+predictor DLLs, PATH, your main PowerShell profile, or import old PSReadLine history.
+It requires an existing installed executable and `zsprofile.ps1`. It checks for
+active shells/importers, validates the candidate executable and profile syntax,
+and creates a timestamped backup under `%USERPROFILE%\.zigstory-backups`.
+Backups include the installed executable, profile script, and **entire** history
+directory, including pending payloads and any WAL/SHM files.
+
+The executable is replaced before the script, file hashes are checked, and a
+database/JSON smoke check performs any schema migration. Validation commands time
+out after 30 seconds. A failed upgrade returns a nonzero exit status and restores
+both installed files and the original history directory. Failed-upgrade history
+is moved to a separate `.zigstory.failed-upgrade-*` sibling directory, not mixed
+with the restored database. Backups are retained after success or failure.
+
+If a new recording process appears or a restore fails, rollback stops or reports
+**ROLLBACK INCOMPLETE/BLOCKED**, rather than claiming success. Close all shells and
+inspect the printed backup's `result.txt` and `manifest.json`: they identify the
+original destinations and failed-history location. For manual recovery, preserve
+the current history directory separately, restore the backup's `history`
+directory in its place (or leave it absent if `had_history` is false), then restore
+`zigstory.exe` and `zsprofile.ps1` to the manifest destinations. Do not copy old
+database files on top of a newer WAL/SHM set. Restart PowerShell after success.
+To choose a different backup root, invoke
+`pwsh -NoProfile -File .\scripts\safe-upgrade.ps1 -BackupRoot 'D:\zigstory-backups'`;
+it must be outside the history, executable, and profile directories.
+
+For a manual durable-recording upgrade instead, close existing PowerShell sessions and wait for
+background imports to finish. From `pwsh -NoProfile`, back up your installed
+executable, `zsprofile.ps1`, and the entire `%USERPROFILE%\.zigstory` directory
+(including WAL files, while no zigstory process is running). Then:
+
+```powershell
+Set-Location C:\git\zigstory
+# Build with Zig 0.16.0
+zig build -Doptimize=ReleaseFast
+Copy-Item .\zig-out\bin\zigstory.exe "$env:APPDATA\zigstory\zigstory.exe" -Force
+$profileScript = Join-Path (Split-Path $PROFILE.CurrentUserCurrentHost) 'zsprofile.ps1'
+Copy-Item .\scripts\zsprofile.ps1 $profileScript -Force
+```
+
+Open a normal PowerShell session afterward. Install the executable **before** the
+script: the updated hook requires `import --consume`. Schema version 2 adds an
+event identity for safe retries; older version-1 binaries cannot open it. Restore
+the database backup as well as the old executable if rolling back. This update
+does not change predictor DLLs.
+
 **Note:** If you prefer inline view instead of list view, add this to your profile after sourcing `zsprofile.ps1`:
 
 ```powershell
@@ -293,12 +352,67 @@ zigstory import --file "C:\history.json"
 - Duplicate detection for PSReadLine history
 - Progress tracking during import
 - Handles large history files (10,000+ commands)
-- Estimates timestamps for PSReadLine history; JSON batches use import time
+- Estimates timestamps for PSReadLine history; JSON batches can supply execution time
 
 Single-command recording and both import paths update history, command statistics,
 and new-entry ranks in one transaction. JSON imports require a nonempty `cmd`;
 `cwd`, `exit_code`, and `duration_ms` default to the current directory, 0, and 0.
 Malformed or out-of-range fields reject the batch rather than skipping entries.
+Optional `timestamp` (Unix seconds), `session_id`, `hostname`, and `event_id` retain
+recorded execution metadata. Without them, the existing import-time/default
+behavior is preserved. Durations and timestamps must be nonnegative. Reimporting
+an `event_id` is a no-op for history, frequency, and rank; JSON without event IDs
+continues allowing repeated imports.
+
+### Reliable PowerShell recording
+
+The hook immediately writes one JSON event to `%USERPROFILE%\.zigstory\pending`
+and starts the importer directly, without `cmd.exe` or a batching delay. Successful
+imports delete their own payload, even if the shell exits. Failures retain the
+payload and a neighboring `.error` diagnostic; the next prompt reports failed
+children, and a new session warns about outstanding payloads.
+
+After resolving a missing executable, database lock, or other reported issue:
+
+```powershell
+Retry-ZigstoryPendingRecordings
+```
+
+Only explicitly requested retries are launched. Events are idempotent even if the
+database committed but file cleanup failed. Manual recovery is also available:
+
+```powershell
+zigstory import --file "C:\path\event.json" --consume
+```
+
+`--consume` requires event IDs and deletes the source only after a successful
+transaction. It preserves failed input and writes `<file>.error`. Ordinary JSON
+imports never delete the source. Pending payloads contain command text: keep them
+private and remove obsolete ones only after inspecting the failure.
+
+PSReadLine captures the directory when a command is accepted, without replacing
+an existing history-filtering decision. The prompt records the history entry's
+start time, a shell-wide session ID, and a 64-bit duration. Successful commands
+record exit 0; failed simple native invocations retain their exit code.
+PowerShell/compound/dynamic failures use status 1 when an exact native code cannot
+be identified. A stale `$LASTEXITCODE` is never assigned to a successful cmdlet.
+Without PSReadLine, directory capture falls back to the preceding prompt's
+directory; noninteractive commands without a subsequent prompt are not recorded.
+
+### Local performance profiling
+
+```powershell
+zig build profile-tools -Doptimize=ReleaseFast
+dotnet run --project tests\predictor\PredictorRegressionTests.csproj -c Release -- --profile "$env:USERPROFILE\.zigstory\history.db" "$PWD\zig-out\bin\zigstory.exe" "$PWD\zig-out\bin\zigstory-tui-profile.exe"
+```
+
+The profiler makes a consistent read-only backup and migrates only the disposable
+copy. It prints counts and aggregate CLI/prediction timings, plus TUI paging arena
+usage and sampled process working set, including headless rendering on a
+160-column/240-row stress viewport; no commands or prefixes are printed. CLI
+timings include process startup and empty-directory metrics with warm OS caches.
+TUI measurements exercise real search/browsing and rendering code using a discard
+sink; terminal I/O, the input thread, and interactive first-frame latency are excluded.
 
 #### `zigstory perf`
 
@@ -467,8 +581,11 @@ CREATE TABLE history (
     session_id TEXT,
     hostname TEXT,
     timestamp INTEGER DEFAULT (strftime('%s', 'now')),
+    event_id TEXT,
     rank REAL DEFAULT 0
 );
+
+CREATE UNIQUE INDEX idx_history_event ON history(event_id);
 
 -- Command statistics for frecency
 CREATE TABLE command_stats (

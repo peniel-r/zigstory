@@ -4,6 +4,7 @@ const sqlite = @import("sqlite");
 const vaxis = @import("vaxis");
 const add = @import("cli/add.zig");
 const import_history = @import("cli/import.zig");
+const consume = @import("cli/consume.zig");
 const list_history = @import("cli/list.zig");
 const fzf_search = @import("cli/fzf.zig");
 const tui = @import("tui/main.zig");
@@ -127,6 +128,14 @@ pub fn main(init: std.process.Init) !void {
             }
         },
         .import => |args| {
+            if (args.consume) {
+                const home = getHomeDir(init.environ_map) orelse return error.HomeDirectoryNotFound;
+                consume.run(home, args.file.?, allocator, init.io) catch |err| {
+                    std.debug.print("Recording import failed: {}; payload retained at {s}\n", .{ err, args.file.? });
+                    return err;
+                };
+                return;
+            }
             const home_dir = getHomeDir(init.environ_map) orelse {
                 std.debug.print("Error: Could not determine home directory\n", .{});
                 std.process.exit(1);

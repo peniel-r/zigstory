@@ -120,20 +120,20 @@ zigstory/
 
 ## 4. Architecture & Data Flow
 
-### Command Recording (PowerShell hook → `add`)
+### Command Recording (PowerShell hook → durable JSON import)
 
 ```
-PS Hook (in $PROFILE)
-  └─ zigstory add --cmd <cmd> --cwd <cwd> --exit <code> --duration <ms>
-       └─ cli/args.zig  →  Action.add
-       └─ cli/add.zig
-            ├─ validateCommand / validatePath
-            ├─ generateSessionId (UUID v4 via std.Random.IoSource)
-            ├─ getHostname ($COMPUTERNAME / $HOSTNAME)
-            ├─ ranking.getCommandHash (SHA-256 hex)
-            ├─ INSERT INTO history
-            ├─ ranking.updateCommandStats  (upsert command_stats)
-            └─ ranking.updateHistoryRank   (update rank column)
+PSReadLine acceptance hook → capture starting directory (preserve prior handler)
+Prompt → snapshot $? / native exit code and history execution time/duration
+  └─ Write event JSON to %USERPROFILE%\.zigstory\pending (shell session/event IDs)
+  └─ Process.Start → zigstory import --file <payload> --consume
+       └─ cli/consume.zig → initialize DB, import, delete payload on success
+       └─ cli/import.zig → db/record.zig Writer (one atomic transaction)
+            ├─ INSERT history ON CONFLICT(event_id) DO NOTHING
+            ├─ UPSERT command_stats only for a newly inserted event
+            └─ UPDATE new-entry rank
+       └─ Failure → retain payload + .error diagnostic; prompt warns
+  └─ Retry-ZigstoryPendingRecordings → explicitly retry idempotent events
 ```
 
 ### Interactive Search (`search` → TUI)
@@ -187,12 +187,14 @@ CREATE TABLE IF NOT EXISTS history (
     hostname    TEXT,
     timestamp   INTEGER DEFAULT (strftime('%s', 'now')),
     cmd_hash    TEXT,    -- SHA-256 hex of normalised command
+    event_id    TEXT,
     rank        REAL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_cmd_prefix ON history(cmd COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS idx_rank       ON history(rank DESC, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_cmd_hash   ON history(cmd_hash);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_history_event ON history(event_id);
 ```
 
 ### `command_stats` table
@@ -216,7 +218,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS history_fts
 ```
 
 `PRAGMA user_version` tracks transactional schema migrations (currently version
-1). Normal startup does not scan history or retry ALTERs. The update trigger
+2, adding nullable unique `event_id`). Normal startup does not scan history or retry ALTERs. The update trigger
 tracks command/ID changes, not rank/hash-only updates. Use `zigstory maintenance`
 to explicitly rebuild and validate FTS, followed by `PRAGMA optimize`.
 

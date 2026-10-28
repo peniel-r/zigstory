@@ -78,6 +78,22 @@ pub fn build(b: *std.Build) void {
     all_tests.dependOn(test_step);
     all_tests.dependOn(core_test_step);
 
+    const tui_profile = b.addExecutable(.{
+        .name = "zigstory-tui-profile",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tui/profile.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "sqlite", .module = sqlite_mod },
+                .{ .name = "vaxis", .module = vaxis_mod },
+            },
+        }),
+    });
+    const profile_install = b.addInstallArtifact(tui_profile, .{});
+    const profile_step = b.step("profile-tools", "Build the read-only TUI paging/rendering profiler");
+    profile_step.dependOn(&profile_install.step);
+
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);

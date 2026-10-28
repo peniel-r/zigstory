@@ -15,7 +15,7 @@ pub const History = struct {
 const ranking = @import("ranking.zig");
 const record = @import("record.zig");
 
-pub const schema_version = 1;
+pub const schema_version = 2;
 
 /// Execute one or more SQL statements that produce no result rows.
 /// Wraps sqlite3_exec with a null callback.
@@ -69,6 +69,16 @@ fn migrate(db: *sqlite.Db) !void {
         try rawExec(db, "COMMIT");
         return;
     }
+    if (version < 1) try migrateInitial(db);
+    if (version < 2) {
+        try rawExec(db, "ALTER TABLE history ADD COLUMN event_id TEXT");
+        try rawExec(db, "CREATE UNIQUE INDEX idx_history_event ON history(event_id)");
+    }
+    try rawExec(db, "PRAGMA user_version=2");
+    try rawExec(db, "COMMIT");
+}
+
+fn migrateInitial(db: *sqlite.Db) !void {
     const had_fts = try queryInt(db, "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'history_fts'") != 0;
     const ddl = [_][:0]const u8{
         \\CREATE TABLE IF NOT EXISTS history (
@@ -111,8 +121,6 @@ fn migrate(db: *sqlite.Db) !void {
         try rawExec(db, "INSERT INTO history_fts(history_fts) VALUES('rebuild')");
     }
     try ranking.initRanking(db);
-    try rawExec(db, "PRAGMA user_version=1");
-    try rawExec(db, "COMMIT");
 }
 
 /// Explicitly rebuild and validate the external-content FTS index.

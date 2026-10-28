@@ -22,9 +22,10 @@ The installed Engram executable does not support this project's documented
 `status` or `impact` commands; those checks were attempted before source edits.
 Do not push or commit the optimization changes without human review.
 
-## Second pass (uncommitted)
+## Second pass
 
-First pass committed as `a2d6e79`; do not merge or push. The user chose to keep
+First pass committed as `a2d6e79`; second pass committed as `ad691b4`. Both were
+pushed to `performance_optimizations` with user approval, without merging. The user chose to keep
 immediate recording, so write batching is deferred.
 
 - [x] Version database migrations; remove full-history startup scans and repeated
@@ -56,3 +57,70 @@ prediction latency):
 Always using the bound-prefix plan took 11.019 ms for broad `git`; the bounded
 128-candidate probe avoids that regression at a small common-prefix overhead.
 These synthetic measurements are not a universal latency guarantee.
+
+## Third pass
+
+- [x] Preserve immediate asynchronous recording with durable per-user payloads,
+  automatic success cleanup, persistent failure diagnostics and safe retry.
+- [x] Capture pre-execution directory, actual execution time, session identity,
+  64-bit duration and exit status without reusing stale native failure codes.
+- [x] Profile a read-only snapshot of local history; expose aggregate results only,
+  distinguish full startup/prediction timings from TUI paging/memory measurements.
+- [x] Add failure-path/metadata/migration regressions, update docs and installation
+  steps, and verify `zig build run`.
+
+The user confirmed the installed upgrade works and approved committing and
+pushing the third pass and safe-upgrade automation. Keep the branch unmerged.
+
+Third-pass validation: 21 Zig regressions passed in Debug and ReleaseFast;
+73 functional checks, 14 JSON checks, 32 recording checks, and predictor
+regressions passed. The same five functional skips apply. Recording coverage
+includes a separate shell exiting immediately after launching its importer.
+Final `zig build run -Doptimize=ReleaseFast` succeeded.
+
+Local ReleaseFast profile of a read-only snapshot (4,108 history entries, warm OS
+caches; no command text or prefixes reported):
+
+| Measurement | Median | p95 |
+| --- | --- | --- |
+| CLI process startup + empty-directory metrics | 178.879 ms | 192.272 ms |
+| Full predictor request with a new connection | 0.0575 ms | 0.5951 ms |
+| Cached predictor request | 0.0043 ms | 0.0077 ms |
+| TUI search/browsing data path | 0.7935 ms | 1.0224 ms |
+| Headless TUI rendering, 160x240 stress viewport | 4.2659 ms | 4.6700 ms |
+
+Across 80 TUI iterations, both result-arena halves peaked at 97,988 bytes;
+frame-arena capacity peaked at 3,636 bytes. Sampled process working set peaked at
+21,839,872 bytes (20.8 MiB). These measurements include headless rendering to a
+discard sink, not terminal I/O, the input thread, or interactive startup latency.
+CLI startup remains the largest measured cost; these are measurements, not a
+claimed before/after speedup.
+
+Installed files and the original history database remain unchanged. Upgrade executable first,
+then profile script; no predictor update is needed. Back up the entire database
+directory before upgrading because schema version 2 requires restoring that
+backup when rolling back to an older binary.
+
+## Safe upgrade automation
+
+- [x] Add a dedicated Just recipe and fail-fast upgrade script with idle-process
+  checks, persistent backups, post-install validation and database-aware rollback.
+- [x] Exercise success, preflight refusal, and rollback against isolated installs;
+  document invocation and recovery, then verify `zig build run`.
+
+Added `just safe-upgrade` (no rebuild and no predictor/PATH/main-profile changes).
+Backups retain executable, hook, complete history/WAL/pending files, destination
+manifest and result log. Checks require a quiet installation and a NoProfile
+invocation chain; validation has a 30-second timeout. Failed history is preserved
+separately before restoring the original directory. Live-process or restoration
+failures report blocked/incomplete recovery instead of claiming rollback success.
+
+Isolated regressions passed for success, incomplete backup, replacement failure,
+post-migration failure, a real malformed-database validation error, absent prior
+history, process refusal, rollback blockage/failure and invalid profile syntax.
+Real process preflight refused an active shell as intended; Just dry-run resolves
+the new recipe correctly. `zig build run -Doptimize=ReleaseFast` succeeded.
+The updated PowerShell runner passed functional, JSON, recording and upgrade
+regressions; the existing five functional skips remain unchanged.
+No actual installation/upgrade was performed. Engram impact analysis remains
+unavailable because the installed tool rejects the documented `impact` command.

@@ -93,6 +93,7 @@ pub fn printHelp() void {
         \\
         \\    OPTIONS:
         \\      -f, --file <PATH>        Import a JSON batch (optional)
+        \\          --consume            Delete event-ID payload after commit; retain failures with .error
         \\
         \\    FEATURES:
         \\      * Duplicate detection for PSReadLine history
@@ -100,6 +101,7 @@ pub fn printHelp() void {
         \\      * Handles large history files (10,000+ commands)
         \\      * Atomic history, statistics, and new-entry rank updates
         \\      * Invalid JSON entries reject the entire batch
+        \\      * Optional timestamp, session_id, hostname, event_id preserve recording metadata
         \\
         \\    EXAMPLE:
         \\      zigstory import                           # Import from default location
@@ -384,6 +386,7 @@ fn printImportHelp() void {
         \\
         \\OPTIONS:
         \\    -f, --file <PATH>        Import a JSON batch (optional)
+        \\        --consume            Delete event-ID payload after commit; retain failures with .error
         \\
         \\DESCRIPTION:
         \\    Imports existing PowerShell history into the zigstory database.
@@ -397,6 +400,7 @@ fn printImportHelp() void {
         \\    • Handles large history files (10,000+ commands)
         \\    • Atomic history, statistics, and new-entry rank updates
         \\    • Invalid JSON entries reject the entire batch
+        \\    • Optional timestamp, session_id, hostname, event_id preserve recording metadata
         \\
         \\EXAMPLES:
         \\    zigstory import                           # Import from default location

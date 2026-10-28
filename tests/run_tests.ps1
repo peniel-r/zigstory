@@ -20,4 +20,8 @@ $here = $PSScriptRoot
 & "$here\functional_tests.ps1" @PSBoundParameters
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & pwsh -NoProfile -File "$here\json_regressions.ps1"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& pwsh -NoProfile -File "$here\recording_regressions.ps1"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& pwsh -NoProfile -File "$here\upgrade_regressions.ps1"
 exit $LASTEXITCODE

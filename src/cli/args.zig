@@ -26,6 +26,7 @@ pub const ListParams = struct {
 
 pub const ImportParams = struct {
     file: ?[]const u8 = null,
+    consume: bool = false,
 };
 
 pub const PerfParams = struct {
@@ -123,16 +124,23 @@ fn parseList(_: std.mem.Allocator, iter: *std.process.Args.Iterator) !Action {
 
 fn parseImport(allocator: std.mem.Allocator, iter: *std.process.Args.Iterator) !Action {
     var file: ?[]const u8 = null;
+    var consume = false;
 
     while (iter.next()) |arg| {
         if (std.mem.eql(u8, arg, "--file") or std.mem.eql(u8, arg, "-f")) {
             file = try allocator.dupe(u8, iter.next() orelse return error.MissingArgValue);
+        } else if (std.mem.eql(u8, arg, "--consume")) {
+            consume = true;
+        } else {
+            return error.UnknownImportOption;
         }
     }
+    if (consume and file == null) return error.MissingRequiredArgs;
 
     return Action{
         .import = .{
             .file = file,
+            .consume = consume,
         },
     };
 }

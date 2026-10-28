@@ -3,6 +3,13 @@ using System.Management.Automation.Subsystem.Prediction;
 using Microsoft.Data.Sqlite;
 using zigstoryPredictor;
 
+if (args.Length > 0 && args[0] == "--profile")
+{
+    if (args.Length != 4) throw new ArgumentException("Usage: --profile <history.db> <zigstory.exe> <zigstory-tui-profile.exe>");
+    HistoryProfiler.Run(args[1], args[2], args[3]);
+    return;
+}
+
 var directory = Path.Combine(Path.GetTempPath(), $"zigstory_predictor_{Guid.NewGuid():N}");
 Directory.CreateDirectory(directory);
 try

@@ -1,7 +1,7 @@
 # zigstory — Functional Tests
 
-This folder contains the PowerShell 7 functional and JSON regression suites for
-zigstory. The runner executes both; Zig core/TUI tests run separately.
+This folder contains the PowerShell 7 functional, JSON, and recording regression
+suites for zigstory. The runner executes all three; Zig core/TUI tests run separately.
 
 ## Prerequisites
 
@@ -40,6 +40,7 @@ zig build test -Doptimize=ReleaseFast
 
 # After building the executable
 pwsh -NoProfile -File tests\json_regressions.ps1
+pwsh -NoProfile -File tests\recording_regressions.ps1
 ```
 
 Core tests check index selection, atomic recording/imports, validation, recency,
@@ -48,11 +49,42 @@ resource ownership/first-frame rendering, more than 50,000 matches, directory
 filtering, queued edits, page navigation, large viewports, and bounded result
 memory. JSON regressions exercise the actual PowerShell recording serializer and
 CLI output, including long, quoted, multiline, and Unicode commands. They extract
-only the recording function and mock process launch without installing hooks.
+the recording helpers and mock process launch without installing hooks.
 Core regressions also cover legacy-schema migration, atomic rollback, future
 schema rejection, bounded startup page reads, FTS maintenance, and metadata-only
 updates. TUI regressions include Unicode grapheme deletion and Windows-path
-colons; JSON regressions exercise the explicit maintenance command.
+colons; JSON regressions exercise the explicit maintenance command. Recording
+tests run real asynchronous importers against isolated history, covering launch,
+import, database-startup and post-commit cleanup failures, retry/deduplication,
+shell exit before import completes, 64-bit duration, history-filter preservation,
+and prompt status/directory/time.
+They extract helper functions without loading the complete profile or predictor.
+
+`pwsh -NoProfile -File tests\upgrade_regressions.ps1` exercises safe upgrades on
+isolated installations with real executable/database validation. It covers
+backups, replacement failure, post-migration failure, exact database restoration,
+pending payloads, WAL separation, no prior history, busy-shell refusal, blocked or
+incomplete rollback, and invalid source profiles. Process inventory and injected
+failures are mocked; no installed files or real user history are changed. This
+suite also runs through `tests\run_tests.ps1`.
+
+For aggregate profiling of a real local history, without printing command text:
+
+```powershell
+zig build -Doptimize=ReleaseFast
+zig build profile-tools -Doptimize=ReleaseFast
+dotnet run --project tests\predictor\PredictorRegressionTests.csproj -c Release -- --profile "$env:USERPROFILE\.zigstory\history.db" "$PWD\zig-out\bin\zigstory.exe" "$PWD\zig-out\bin\zigstory-tui-profile.exe"
+```
+
+The profiler opens the source read-only and uses SQLite backup to include committed
+WAL data, then migrates/profiles/deletes its temporary snapshot. It measures full
+CLI process startup plus an empty-directory query, prediction requests on
+internally sampled prefixes, and actual TUI search/browsing pages. It reports
+median/p95 times and first/second-half result-arena peaks to expose memory growth.
+The TUI profiler also runs real rendering on a headless 160x240 stress viewport
+with output discarded, and reports frame-arena capacity and render timings.
+Sampled process memory excludes terminal I/O and the input thread; interactive
+first-frame latency is not measured.
 
 Predictor regressions use an isolated .NET console harness without additional
 test-framework packages:

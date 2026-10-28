@@ -157,7 +157,13 @@ const JsonEntry = struct {
     cwd: ?[]const u8 = null,
     exit_code: i32 = 0,
     duration_ms: i64 = 0,
+    timestamp: ?i64 = null,
+    session_id: ?[]const u8 = null,
+    hostname: ?[]const u8 = null,
+    event_id: ?[]const u8 = null,
 };
+
+pub const ImportResult = struct { total: usize, imported: usize };
 
 /// Import from JSON file (for batch writes from PowerShell)
 pub fn importFromFile(
@@ -166,10 +172,28 @@ pub fn importFromFile(
     default_cwd: []const u8,
     allocator: std.mem.Allocator,
     io: std.Io,
-) !struct {
-    total: usize,
-    imported: usize,
-} {
+) !ImportResult {
+    return importFile(db, file_path, default_cwd, allocator, io, false);
+}
+
+pub fn importRecordingFile(
+    db: *sqlite.Db,
+    file_path: []const u8,
+    default_cwd: []const u8,
+    allocator: std.mem.Allocator,
+    io: std.Io,
+) !ImportResult {
+    return importFile(db, file_path, default_cwd, allocator, io, true);
+}
+
+fn importFile(
+    db: *sqlite.Db,
+    file_path: []const u8,
+    default_cwd: []const u8,
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    require_event_id: bool,
+) !ImportResult {
     // Read JSON file – std.fs.cwd() removed in Zig 0.16; use std.Io.Dir.cwd().
     var file = try std.Io.Dir.cwd().openFile(io, file_path, .{});
     defer file.close(io);
@@ -208,16 +232,18 @@ pub fn importFromFile(
     const timestamp = std.Io.Timestamp.now(io, .real).toSeconds();
 
     for (entries) |entry| {
-        try writer.record(.{
+        if (require_event_id and entry.event_id == null) return error.MissingEventId;
+        const inserted = try writer.record(.{
             .cmd = entry.cmd,
             .cwd = entry.cwd orelse default_cwd,
             .exit_code = entry.exit_code,
             .duration_ms = entry.duration_ms,
-            .session_id = session_id,
-            .hostname = hostname,
-            .timestamp = timestamp,
+            .session_id = entry.session_id orelse session_id,
+            .hostname = entry.hostname orelse hostname,
+            .timestamp = entry.timestamp orelse timestamp,
+            .event_id = entry.event_id,
         }, allocator, timestamp);
-        imported += 1;
+        imported += @intFromBool(inserted);
     }
 
     // Commit transaction
@@ -297,7 +323,7 @@ pub fn importHistory(
             skipped += 1;
         } else {
             // Insert entry
-            try writer.record(.{
+            _ = try writer.record(.{
                 .cmd = entry.cmd,
                 .cwd = cwd,
                 .exit_code = 0, // Unknown for imported history

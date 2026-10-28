@@ -129,6 +129,56 @@ test "time and directory indexes cover deterministic latest-entry queries" {
     }
 }
 
+test "version one databases gain event identities without changing existing history" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "v1.db", .data = "" });
+    const path = try tmp.dir.realPathFileAlloc(io, "v1.db", allocator);
+    defer allocator.free(path);
+    {
+        var db = try sqlite.Db.init(.{ .mode = .{ .File = path }, .open_flags = .{ .write = true } });
+        defer db.deinit();
+        try db.exec("CREATE TABLE history (id INTEGER PRIMARY KEY, cmd TEXT)", .{}, .{});
+        try db.exec("INSERT INTO history VALUES(1,'existing')", .{}, .{});
+        try db.exec("PRAGMA user_version=1", .{}, .{});
+    }
+    var db = try zigstory.db.initDb(path);
+    defer db.deinit();
+    try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "PRAGMA user_version"));
+    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT COUNT(*) FROM history WHERE cmd='existing' AND event_id IS NULL"));
+    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT COUNT(*) FROM sqlite_schema WHERE name='idx_history_event'"));
+}
+
+test "recording imports preserve metadata and retry without incrementing history or statistics" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "event.json", .data =
+        \\[{"cmd":"recorded","cwd":"before","exit_code":7,"duration_ms":3000000000,
+        \\ "timestamp":1234567890,"session_id":"shell-session","hostname":"shell-host","event_id":"unique-event"}]
+    });
+    const path = try tmp.dir.realPathFileAlloc(io, "event.json", allocator);
+    defer allocator.free(path);
+    var db = try zigstory.db.initDb(":memory:");
+    defer db.deinit();
+    try std.testing.expectEqual(@as(usize, 1), (try import_history.importRecordingFile(&db, path, "default", allocator, io)).imported);
+    try std.testing.expectEqual(@as(usize, 0), (try import_history.importRecordingFile(&db, path, "default", allocator, io)).imported);
+    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT COUNT(*) FROM history WHERE cwd='before' AND exit_code=7 AND duration_ms=3000000000 AND timestamp=1234567890 AND session_id='shell-session' AND hostname='shell-host'"));
+    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT frequency FROM command_stats"));
+    try std.testing.expectEqual(@as(i64, 1234567890), try scalar(&db, "SELECT last_used FROM command_stats"));
+    try tmp.dir.writeFile(io, .{ .sub_path = "event.json", .data = "[{\"cmd\":\"legacy\"}]" });
+    try std.testing.expectError(error.MissingEventId, import_history.importRecordingFile(&db, path, "default", allocator, io));
+    try std.testing.expectEqual(@as(usize, 1), (try import_history.importFromFile(&db, path, "default", allocator, io)).imported);
+    try std.testing.expectEqual(@as(usize, 1), (try import_history.importFromFile(&db, path, "default", allocator, io)).imported);
+    try std.testing.expectEqual(@as(i64, 3), try scalar(&db, "SELECT COUNT(*) FROM history"));
+    try tmp.dir.writeFile(io, .{ .sub_path = "event.json", .data = "[{\"cmd\":\"would insert\",\"event_id\":\"new-event\"},{\"cmd\":\"missing event\"}]" });
+    try std.testing.expectError(error.MissingEventId, import_history.importRecordingFile(&db, path, "default", allocator, io));
+    try std.testing.expectEqual(@as(i64, 3), try scalar(&db, "SELECT COUNT(*) FROM history"));
+    try tmp.dir.writeFile(io, .{ .sub_path = "event.json", .data = "[{\"cmd\":\"bad\",\"timestamp\":-1}]" });
+    try std.testing.expectError(error.InvalidTimestamp, import_history.importFromFile(&db, path, "default", allocator, io));
+    try tmp.dir.writeFile(io, .{ .sub_path = "event.json", .data = "[{\"cmd\":\"bad\",\"duration_ms\":-1}]" });
+    try std.testing.expectError(error.InvalidDuration, import_history.importFromFile(&db, path, "default", allocator, io));
+}
+
 test "add updates history and statistics atomically and captures the correct row ID" {
     var db = try zigstory.db.initDb(":memory:");
     defer db.deinit();
@@ -184,7 +234,7 @@ test "older imported timestamps do not move command recency backwards" {
     try db.exec("BEGIN", .{}, .{});
     errdefer zigstory.record.rollback(&db);
     for ([_]i64{ 200000, 100000 }) |timestamp| {
-        try writer.record(.{
+        _ = try writer.record(.{
             .cmd = "git status",
             .cwd = "C:\\repo",
             .exit_code = 0,

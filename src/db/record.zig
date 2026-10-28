@@ -10,6 +10,7 @@ pub const Entry = struct {
     session_id: []const u8,
     hostname: []const u8,
     timestamp: i64,
+    event_id: ?[]const u8 = null,
 };
 
 /// Reuse within a caller-owned transaction so all three writes commit together.
@@ -21,8 +22,9 @@ pub const Writer = struct {
 
     pub fn init(db: *sqlite.Db) !Writer {
         var insert = try db.prepareDynamic(
-            \\INSERT INTO history (cmd, cwd, exit_code, duration_ms, session_id, hostname, timestamp, cmd_hash)
-            \\VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            \\INSERT INTO history (cmd, cwd, exit_code, duration_ms, session_id, hostname, timestamp, cmd_hash, event_id)
+            \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            \\ON CONFLICT(event_id) DO NOTHING
         );
         errdefer insert.deinit();
         var stats = try db.prepareDynamic(
@@ -48,9 +50,14 @@ pub const Writer = struct {
         self.insert.deinit();
     }
 
-    pub fn record(self: *Writer, entry: Entry, allocator: std.mem.Allocator, now: i64) !void {
+    pub fn record(self: *Writer, entry: Entry, allocator: std.mem.Allocator, now: i64) !bool {
         if (entry.cmd.len == 0) return error.EmptyCommand;
         if (entry.cwd.len == 0) return error.EmptyPath;
+        if (entry.duration_ms < 0) return error.InvalidDuration;
+        if (entry.timestamp < 0) return error.InvalidTimestamp;
+        if (entry.event_id) |id| {
+            if (id.len == 0) return error.EmptyEventId;
+        }
         const hash = try ranking.getCommandHash(entry.cmd, allocator);
         defer allocator.free(hash);
         defer resetStatement(&self.insert);
@@ -59,11 +66,14 @@ pub const Writer = struct {
         try self.insert.exec(.{}, .{
             entry.cmd,        entry.cwd,      entry.exit_code, entry.duration_ms,
             entry.session_id, entry.hostname, entry.timestamp, hash,
+            entry.event_id,
         });
+        if (sqlite.c.sqlite3_changes(self.db.db) == 0) return false;
         const id = sqlite.c.sqlite3_last_insert_rowid(self.db.db);
         try self.stats.exec(.{}, .{ hash, entry.cmd, entry.timestamp });
         const config = ranking.FrecencyConfig{};
         try self.rank.exec(.{}, .{ config.frequency_weight, config.recency_weight, now, hash, id });
+        return true;
     }
 };
 

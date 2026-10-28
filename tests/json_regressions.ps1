@@ -16,25 +16,24 @@ function Assert-True([bool]$Condition, [string]$Message) {
     Write-Host "[PASS] $Message"
 }
 
-# Extract only the recording function: do not install profile hooks or predictors.
+# Extract recording helpers only: do not install profile hooks or predictors.
 $profilePath = Join-Path (Split-Path $PSScriptRoot -Parent) 'scripts\zsprofile.ps1'
 $tokens = $null
 $parseErrors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile($profilePath, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
-$recordFunction = $ast.Find({
+$recordFunctions = $ast.FindAll({
     param($node)
     $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
-    $node.Name -eq 'Global:ZigstoryRecordCommand'
+    $node.Name -in @('Global:ZigstoryRecordCommand', 'Global:Get-ZigstoryRecordingDirectory')
 }, $true)
-if (-not $recordFunction) { throw 'Recording function not found' }
-Invoke-Expression $recordFunction.Extent.Text
+if ($recordFunctions.Count -ne 2) { throw 'Recording helpers not found' }
+foreach ($function in $recordFunctions) { Invoke-Expression $function.Extent.Text }
+$Global:ZigstorySessionId = [Guid]::NewGuid().ToString()
 
 # Capture the generated file instead of launching a detached background importer.
-function Start-Process {
-    param($FilePath, $ArgumentList, $WindowStyle, $ErrorAction)
-    if ($ArgumentList[-1] -notmatch '--file "([^"]+)"$') { throw 'Import file argument missing' }
-    $script:payloadFile = $Matches[1]
+function Global:Start-ZigstoryRecordingImport([string]$Path) {
+    $script:payloadFile = $Path
 }
 
 try {

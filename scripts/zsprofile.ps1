@@ -34,26 +34,149 @@ function Global:ZigstoryShouldRecord($cmd) {
     return $true
 }
 
-# Write command asynchronously (truly detached)
-function Global:ZigstoryRecordCommand($cmd, $cwd, $exitCode, $duration) {
-    if (-not (Test-Path $Global:ZigstoryBin)) { return }
+foreach ($name in @('ZigstoryRecordingProcesses', 'ZigstorySessionId', 'ZigstoryAcceptedCommand',
+    'ZigstoryHistoryCaptureInstalled', 'ZigstoryPreviousHistoryHandler',
+    'ZigstoryOldPromptScriptBlock', 'ZigstoryLastHistoryId')) {
+    if ($null -eq (Get-Variable -Name $name -Scope Global -ErrorAction SilentlyContinue)) {
+        Set-Variable -Name $name -Scope Global -Value $null
+    }
+}
+if ($null -eq $Global:ZigstoryRecordingProcesses) {
+    $Global:ZigstoryRecordingProcesses = [Collections.Generic.List[object]]::new()
+}
+if ($null -eq $Global:ZigstorySessionId) {
+    $Global:ZigstorySessionId = [Guid]::NewGuid().ToString()
+}
+$Global:ZigstoryPromptDirectory = $PWD.ProviderPath
 
-    # Build temp JSON
-    $tempFile = [System.IO.Path]::GetTempFileName()
-    $json = ConvertTo-Json -InputObject @(@{
+function Global:Get-ZigstoryRecordingDirectory {
+    $homeDirectory = if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }
+    if (-not $homeDirectory) { throw 'Cannot determine history recording directory' }
+    return Join-Path $homeDirectory '.zigstory\pending'
+}
+
+function Global:Start-ZigstoryRecordingImport([string]$Path) {
+    $process = [Diagnostics.Process]::new()
+    try {
+        $process.StartInfo = [Diagnostics.ProcessStartInfo]::new()
+        $process.StartInfo.FileName = $Global:ZigstoryBin
+        $process.StartInfo.UseShellExecute = $false
+        $process.StartInfo.CreateNoWindow = $true
+        $process.StartInfo.RedirectStandardError = $true
+        foreach ($argument in @('import', '--file', $Path, '--consume')) {
+            $process.StartInfo.ArgumentList.Add($argument)
+        }
+        if (-not $process.Start()) { throw 'Importer did not start' }
+        $errorTask = $process.StandardError.ReadToEndAsync()
+        $Global:ZigstoryRecordingProcesses.Add([pscustomobject]@{
+            Process = $process
+            ErrorTask = $errorTask
+            Path = $Path
+        })
+    } catch {
+        $process.Dispose()
+        [IO.File]::WriteAllText("$Path.error", "Launch failed: $($_.Exception.Message)")
+        throw
+    }
+}
+
+function Global:Complete-ZigstoryRecordings {
+    [CmdletBinding()]
+    param()
+    for ($i = $Global:ZigstoryRecordingProcesses.Count - 1; $i -ge 0; $i--) {
+        $recording = $Global:ZigstoryRecordingProcesses[$i]
+        if (-not $recording.Process.HasExited) { continue }
+        try {
+            $detail = $recording.ErrorTask.GetAwaiter().GetResult()
+            if ($recording.Process.ExitCode -ne 0 -or [IO.File]::Exists($recording.Path)) {
+                if (-not [IO.File]::Exists("$($recording.Path).error")) {
+                    [IO.File]::WriteAllText("$($recording.Path).error",
+                        "Importer exited with code $($recording.Process.ExitCode) without consuming the payload. Verify the installed executable supports --consume. $detail")
+                }
+                Write-Warning "zigstory recording failed. Payload: $($recording.Path); diagnostic: $($recording.Path).error. Run Retry-ZigstoryPendingRecordings after resolving the error."
+            }
+        } finally {
+            $recording.Process.Dispose()
+            $Global:ZigstoryRecordingProcesses.RemoveAt($i)
+        }
+    }
+}
+
+function Global:Retry-ZigstoryPendingRecordings {
+    Complete-ZigstoryRecordings
+    $directory = Get-ZigstoryRecordingDirectory
+    if (-not [IO.Directory]::Exists($directory)) { return }
+    foreach ($path in [IO.Directory]::EnumerateFiles($directory, '*.json')) {
+        if (@($Global:ZigstoryRecordingProcesses | Where-Object Path -eq $path).Count -gt 0) { continue }
+        try {
+            Start-ZigstoryRecordingImport $path
+        } catch {
+            Write-Warning "zigstory could not retry $path; see $path.error. $($_.Exception.Message)"
+        }
+    }
+}
+
+function Global:ZigstoryRecordCommand($cmd, $cwd, $exitCode, $duration,
+    [long]$timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) {
+    $directory = Get-ZigstoryRecordingDirectory
+    [IO.Directory]::CreateDirectory($directory) | Out-Null
+    $eventId = [Guid]::NewGuid().ToString()
+    $path = Join-Path $directory "$eventId.json"
+    $payload = @{
         cmd = $cmd
         cwd = $cwd
         exit_code = $exitCode
         duration_ms = $duration
-    }) -Compress
+        timestamp = $timestamp
+        session_id = $Global:ZigstorySessionId
+        hostname = [Environment]::MachineName
+        event_id = $eventId
+    }
+    $json = ConvertTo-Json -InputObject @($payload) -Compress
+    [IO.File]::WriteAllText($path, $json, [Text.UTF8Encoding]::new($false))
+    Start-ZigstoryRecordingImport $path
+}
 
-    # Write to temp file
-    $utf8 = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($tempFile, $json, $utf8)
+function Global:Initialize-ZigstoryHistoryCapture {
+    if ($Global:ZigstoryHistoryCaptureInstalled) { return }
+    $Global:ZigstoryPreviousHistoryHandler = (Get-PSReadLineOption).AddToHistoryHandler
+    Set-PSReadLineOption -AddToHistoryHandler {
+        param($line)
+        $Global:ZigstoryAcceptedCommand = [pscustomobject]@{
+            Command = $line
+            Directory = $PWD.ProviderPath
+        }
+        if ($null -ne $Global:ZigstoryPreviousHistoryHandler) {
+            return $Global:ZigstoryPreviousHistoryHandler.Invoke($line)
+        }
+        return $true
+    }
+    $Global:ZigstoryHistoryCaptureInstalled = $true
+}
 
-    # Detached execution - no waiting at all
-    # NOTE: The empty "" after /min is the window title - required when exe path is quoted
-    Start-Process cmd.exe -ArgumentList "/c", "start /b /min `"`" `"$Global:ZigstoryBin`" import --file `"$tempFile`"" -WindowStyle Hidden -ErrorAction SilentlyContinue
+function Global:Get-ZigstoryExitCode([bool]$Succeeded, $NativeExitCode, [string]$Command) {
+    if ($Succeeded) { return 0 }
+    if ($null -eq $NativeExitCode -or $NativeExitCode -eq 0) { return 1 }
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseInput($Command, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count -eq 0 -and $ast.EndBlock.Statements.Count -gt 0) {
+        $statement = $ast.EndBlock.Statements[-1]
+        if ($statement -is [Management.Automation.Language.PipelineAst]) {
+            $lastCommand = $statement.PipelineElements[-1]
+            if ($lastCommand -is [Management.Automation.Language.CommandAst]) {
+                $name = $lastCommand.GetCommandName()
+                if ($name) {
+                    $resolved = Get-Command $name -ErrorAction SilentlyContinue
+                    while ($resolved -is [Management.Automation.AliasInfo]) { $resolved = $resolved.ResolvedCommand }
+                    if ($null -ne $resolved -and $resolved.CommandType -eq 'Application') {
+                        return [int]$NativeExitCode
+                    }
+                }
+            }
+        }
+    }
+    return 1
 }
 
 # IMPORTANT: Capture old prompt BEFORE we define ours, and only once
@@ -70,6 +193,10 @@ if ($null -eq $Global:ZigstoryLastHistoryId) {
 }
 
 function Global:Prompt {
+    # Capture status before any PowerShell statement can overwrite $?.
+    $commandSucceeded = $?
+    $nativeExitCode = Get-Variable LASTEXITCODE -Scope Global -ValueOnly -ErrorAction SilentlyContinue
+    $completedDirectory = $PWD.ProviderPath
     # Get history silently - no output
     $lastHistory = Get-History -Count 1 -ErrorAction SilentlyContinue
     
@@ -77,16 +204,25 @@ function Global:Prompt {
         $Global:ZigstoryLastHistoryId = $lastHistory.Id
         try {
             if (ZigstoryShouldRecord $lastHistory.CommandLine) {
-                $duration = [int]$lastHistory.Duration.TotalMilliseconds
-                $exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
-                $cwd = $PWD.ProviderPath
-                ZigstoryRecordCommand $lastHistory.CommandLine $cwd $exitCode $duration
+                $duration = [long][Math]::Max(0, $lastHistory.Duration.TotalMilliseconds)
+                $exitCode = Get-ZigstoryExitCode $commandSucceeded $nativeExitCode $lastHistory.CommandLine
+                $cwd = $Global:ZigstoryPromptDirectory
+                if ($null -ne $Global:ZigstoryAcceptedCommand -and
+                    $Global:ZigstoryAcceptedCommand.Command -ceq $lastHistory.CommandLine) {
+                    $cwd = $Global:ZigstoryAcceptedCommand.Directory
+                }
+                $timestamp = ([DateTimeOffset]$lastHistory.StartExecutionTime).ToUnixTimeSeconds()
+                ZigstoryRecordCommand $lastHistory.CommandLine $cwd $exitCode $duration $timestamp
             }
         }
         catch {
-            # Silently ignore errors to prevent prompt issues
+            Write-Warning "zigstory could not record the last command: $($_.Exception.Message)"
         }
     }
+    $Global:ZigstoryAcceptedCommand = $null
+    $Global:ZigstoryPromptDirectory = $completedDirectory
+    try { Complete-ZigstoryRecordings }
+    catch { Write-Warning "zigstory recording status check failed: $($_.Exception.Message)" }
 
     # Invoke the old prompt if it exists, otherwise return simple prompt
     if ($null -ne $Global:ZigstoryOldPromptScriptBlock) {
@@ -167,6 +303,7 @@ if (Test-Path $Global:ZigstoryBin) {
     # Bind Ctrl+R to interactive search
     if (Get-Module -ListAvailable PSReadLine) {
         Import-Module PSReadLine
+        Initialize-ZigstoryHistoryCapture
         Set-PSReadLineKeyHandler -Key "Ctrl+r" -ScriptBlock {
             $oldClip = Get-Clipboard -Raw
             # Mark clipboard so we know if selection happened
@@ -204,4 +341,10 @@ if (Test-Path $Global:ZigstoryBin) {
     }
 
     Write-Host "Type 'zs' or press 'Ctrl+R' for TUI search, 'Ctrl+F' for fzf search" -ForegroundColor Cyan
+}
+
+$pendingDirectory = Get-ZigstoryRecordingDirectory
+if ([IO.Directory]::Exists($pendingDirectory) -and
+    [IO.Directory]::EnumerateFiles($pendingDirectory, '*.json').GetEnumerator().MoveNext()) {
+    Write-Warning "zigstory has pending recordings in $pendingDirectory. Inspect any .error files, then run Retry-ZigstoryPendingRecordings to retry safely."
 }
