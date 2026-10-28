@@ -68,6 +68,11 @@ incomplete rollback, and invalid source profiles. Process inventory and injected
 failures are mocked; no installed files or real user history are changed. This
 suite also runs through `tests\run_tests.ps1`.
 
+`tests\logging_regressions.ps1` verifies CLI/PowerShell default Error filtering,
+case-insensitive overrides, Off, one-MiB rotation, private argument handling and
+visible log-write failures in isolated directories. Predictor regressions verify
+its default filtering, rotation and persistent database-error diagnostics.
+
 For aggregate profiling of a real local history, without printing command text:
 
 ```powershell

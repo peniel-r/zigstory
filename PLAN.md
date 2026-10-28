@@ -124,3 +124,23 @@ The updated PowerShell runner passed functional, JSON, recording and upgrade
 regressions; the existing five functional skips remain unchanged.
 No actual installation/upgrade was performed. Engram impact analysis remains
 unavailable because the installed tool rejects the documented `impact` command.
+
+## Logging and remaining optimizations
+
+- [x] Add rotating local logs to CLI/TUI, PowerShell and predictor, defaulting to
+  Error; exclude commands and history contents. Validate and commit logging first
+  as explicitly requested (no push requested).
+- [ ] Correct Unicode truncation/highlight columns and imported-history chronology.
+- [ ] Replace per-cell fills and avoid redraws without visible state changes.
+- [ ] Split startup measurements into process, database and query costs; optimize
+  measured bottlenecks rather than assuming a slow SQL query.
+- [ ] Benchmark and improve literal substring counts/grouping/deep pagination.
+- [ ] Add repeatable Windows CI performance gates and final regression validation.
+
+Immediate recording remains required; batching and persistent-writer architecture
+are excluded. Leave subsequent optimizations uncommitted pending review.
+
+Logging validation passed: 21 core/TUI regressions, the complete PowerShell runner
+(including 12 new logging checks), predictor regressions and ReleaseFast
+`zig build run`. The user explicitly requested committing logging before the
+remaining optimization work; no installation or push is part of this step.

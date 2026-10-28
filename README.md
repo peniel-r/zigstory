@@ -364,7 +364,32 @@ behavior is preserved. Durations and timestamps must be nonnegative. Reimporting
 an `event_id` is a no-op for history, frequency, and rank; JSON without event IDs
 continues allowing repeated imports.
 
-### Reliable PowerShell recording
+### Diagnostic logging
+
+CLI/TUI, PowerShell hooks and the predictor write local JSON-lines logs under
+`%USERPROFILE%\.zigstory\logs`: `cli.log`, `powershell.log`, and `predictor.log`.
+The default level is **Error**. Each component rotates at 1 MiB and retains one
+previous file (`.log.1`); process locks serialize concurrent writes. Files are
+created only when an enabled event occurs, not for successful commands.
+Logs contain timestamps, component/severity, static event identifiers/templates
+and error codes, never command text, input prefixes, history rows or exception
+messages. Logging failures remain visible on stderr/PowerShell warnings or the
+predictor's Trace error listener; they do not prevent recording.
+
+Set environment variables before starting the application or in your profile:
+
+```powershell
+$env:ZIGSTORY_LOG_LEVEL = 'Error' # Error (default), Warning, Info, Debug, Off
+# Optional custom location:
+$env:ZIGSTORY_LOG_DIR = 'C:\local-logs\zigstory'
+```
+
+Level names are case insensitive. Invalid levels report a diagnostic and use Error.
+Existing recording `.error` files remain independent recovery diagnostics.
+Updating all logging components requires the executable, hook and rebuilt
+predictor DLLs; `just safe-upgrade` updates only executable/hook, not predictor DLLs.
+
+### Recording recovery
 
 The hook immediately writes one JSON event to `%USERPROFILE%\.zigstory\pending`
 and starts the importer directly, without `cmd.exe` or a batching delay. Successful

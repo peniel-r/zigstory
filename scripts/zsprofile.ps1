@@ -49,6 +49,57 @@ if ($null -eq $Global:ZigstorySessionId) {
 }
 $Global:ZigstoryPromptDirectory = $PWD.ProviderPath
 
+function Global:Write-ZigstoryLog {
+    param(
+        [ValidateSet('Error', 'Warning', 'Info', 'Debug')][string]$Level = 'Error',
+        [Parameter(Mandatory)][ValidatePattern('^[a-zA-Z0-9_.-]{1,128}$')][string]$Event,
+        [ValidatePattern('^[a-zA-Z0-9_.-]{1,128}$')][string]$Code
+    )
+    $levels = @('Error', 'Warning', 'Info', 'Debug', 'Off')
+    $threshold = if ($env:ZIGSTORY_LOG_LEVEL) { $env:ZIGSTORY_LOG_LEVEL } else { 'Error' }
+    if ($threshold -notin $levels) {
+        Write-Warning 'Invalid ZIGSTORY_LOG_LEVEL; using Error.'
+        $threshold = 'Error'
+    }
+    $ranks = @{ Error = 0; Warning = 1; Info = 2; Debug = 3; Off = 4 }
+    if ($threshold -eq 'Off' -or $ranks[$Level] -gt $ranks[$threshold]) { return }
+    try {
+        $directory = if ($env:ZIGSTORY_LOG_DIR) { $env:ZIGSTORY_LOG_DIR } else {
+            Join-Path (Split-Path (Get-ZigstoryRecordingDirectory)) 'logs'
+        }
+        [IO.Directory]::CreateDirectory($directory) | Out-Null
+        $lock = [IO.File]::Open((Join-Path $directory 'powershell.lock'),
+            [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::ReadWrite)
+        try {
+            for ($attempt = 0; ; $attempt++) {
+                try { $lock.Lock(0, 1); break }
+                catch [IO.IOException] {
+                    if ($attempt -ge 99) { throw }
+                    Start-Sleep -Milliseconds 10
+                }
+            }
+            try {
+                $path = Join-Path $directory 'powershell.log'
+                $line = ConvertTo-Json -Compress -InputObject @{
+                    timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+                    level = $Level
+                    component = 'powershell'
+                    event = $Event
+                    code = $Code
+                }
+                $bytes = [Text.UTF8Encoding]::new($false).GetBytes("$line`n")
+                if ([IO.File]::Exists($path) -and ([IO.FileInfo]::new($path).Length + $bytes.Length) -gt 1MB) {
+                    [IO.File]::Move($path, "$path.1", $true)
+                }
+                $file = [IO.File]::Open($path, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+                try { $file.Write($bytes) } finally { $file.Dispose() }
+            } finally { $lock.Unlock(0, 1) }
+        } finally { $lock.Dispose() }
+    } catch {
+        Write-Warning "zigstory logging failed: $($_.Exception.GetType().Name)"
+    }
+}
+
 function Global:Get-ZigstoryRecordingDirectory {
     $homeDirectory = if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }
     if (-not $homeDirectory) { throw 'Cannot determine history recording directory' }
@@ -74,6 +125,7 @@ function Global:Start-ZigstoryRecordingImport([string]$Path) {
             Path = $Path
         })
     } catch {
+        Write-ZigstoryLog -Event 'recording_launch_failed' -Code $_.Exception.GetType().Name
         $process.Dispose()
         [IO.File]::WriteAllText("$Path.error", "Launch failed: $($_.Exception.Message)")
         throw
@@ -89,6 +141,7 @@ function Global:Complete-ZigstoryRecordings {
         try {
             $detail = $recording.ErrorTask.GetAwaiter().GetResult()
             if ($recording.Process.ExitCode -ne 0 -or [IO.File]::Exists($recording.Path)) {
+                Write-ZigstoryLog -Event 'recording_import_failed' -Code "Exit_$($recording.Process.ExitCode)"
                 if (-not [IO.File]::Exists("$($recording.Path).error")) {
                     [IO.File]::WriteAllText("$($recording.Path).error",
                         "Importer exited with code $($recording.Process.ExitCode) without consuming the payload. Verify the installed executable supports --consume. $detail")
@@ -216,13 +269,17 @@ function Global:Prompt {
             }
         }
         catch {
+            Write-ZigstoryLog -Event 'recording_failed' -Code $_.Exception.GetType().Name
             Write-Warning "zigstory could not record the last command: $($_.Exception.Message)"
         }
     }
     $Global:ZigstoryAcceptedCommand = $null
     $Global:ZigstoryPromptDirectory = $completedDirectory
     try { Complete-ZigstoryRecordings }
-    catch { Write-Warning "zigstory recording status check failed: $($_.Exception.Message)" }
+    catch {
+        Write-ZigstoryLog -Event 'recording_status_failed' -Code $_.Exception.GetType().Name
+        Write-Warning "zigstory recording status check failed: $($_.Exception.Message)"
+    }
 
     # Invoke the old prompt if it exists, otherwise return simple prompt
     if ($null -ne $Global:ZigstoryOldPromptScriptBlock) {
@@ -259,6 +316,7 @@ foreach ($dllPath in $possibleDllPaths) {
             $dllLoaded = $true
             break
         } catch {
+            Write-ZigstoryLog -Event 'predictor_load_failed' -Code $_.Exception.GetType().Name
             Write-Warning "Failed to load zigstory predictor from $dllPath"
         }
     }

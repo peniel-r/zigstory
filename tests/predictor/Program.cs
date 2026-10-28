@@ -14,6 +14,31 @@ var directory = Path.Combine(Path.GetTempPath(), $"zigstory_predictor_{Guid.NewG
 Directory.CreateDirectory(directory);
 try
 {
+    var savedLogDirectory = Environment.GetEnvironmentVariable("ZIGSTORY_LOG_DIR");
+    var savedLogLevel = Environment.GetEnvironmentVariable("ZIGSTORY_LOG_LEVEL");
+    try
+    {
+        var logs = Path.Combine(directory, "logs");
+        Environment.SetEnvironmentVariable("ZIGSTORY_LOG_DIR", logs);
+        Environment.SetEnvironmentVariable("ZIGSTORY_LOG_LEVEL", null);
+        DiagnosticLog.Write(DiagnosticLevel.Warning, "not_persisted");
+        Check(!Directory.Exists(logs), "Predictor logs only Error entries by default");
+        DiagnosticLog.Write(DiagnosticLevel.Error, "test_error", "TestError");
+        var logPath = Path.Combine(logs, "predictor.log");
+        Check(File.ReadAllText(logPath).Contains("\"level\":\"Error\""), "Predictor persists structured Error entries");
+        File.WriteAllText(logPath, new string('x', 1024 * 1024));
+        DiagnosticLog.Write(DiagnosticLevel.Error, "rotate");
+        Check(File.Exists(logPath + ".1") && new FileInfo(logPath).Length < 1024 * 1024, "Predictor log rotation is bounded");
+        Environment.SetEnvironmentVariable("ZIGSTORY_LOG_LEVEL", "Off");
+        var before = File.ReadAllText(logPath);
+        DiagnosticLog.Write(DiagnosticLevel.Error, "disabled");
+        Check(File.ReadAllText(logPath) == before, "Predictor honors Off");
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("ZIGSTORY_LOG_DIR", savedLogDirectory);
+        Environment.SetEnvironmentVariable("ZIGSTORY_LOG_LEVEL", savedLogLevel);
+    }
     var path = Path.Combine(directory, "history;test.db");
     using var writer = OpenDatabase(path);
     Execute(writer, """
@@ -70,15 +95,20 @@ try
         using var log = new StringWriter();
         using var listener = new TextWriterTraceListener(log);
         Trace.Listeners.Add(listener);
+        var previousDirectory = Environment.GetEnvironmentVariable("ZIGSTORY_LOG_DIR");
+        Environment.SetEnvironmentVariable("ZIGSTORY_LOG_DIR", Path.Combine(directory, "failure-logs"));
         try
         {
             Check(Text(Get(missing, "git")).Length == 0, "Unavailable history does not disrupt prediction");
             Trace.Flush();
             Check(log.ToString().Contains("prediction query failed"), "Database failures emit a diagnostic");
+            Check(File.ReadAllText(Path.Combine(directory, "failure-logs", "predictor.log")).Contains("prediction_query_failed"),
+                "Prediction failures reach the persistent Error log");
         }
         finally
         {
             Trace.Listeners.Remove(listener);
+            Environment.SetEnvironmentVariable("ZIGSTORY_LOG_DIR", previousDirectory);
         }
     }
     if (args.Contains("--benchmark"))

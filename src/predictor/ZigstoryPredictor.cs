@@ -121,7 +121,8 @@ public class ZigstoryPredictor : ICommandPredictor, IDisposable
         }
         catch (SqliteException ex)
         {
-            Trace.TraceWarning("Zigstory prediction query failed: {0}", ex.Message);
+            Trace.TraceError("Zigstory prediction query failed: SQLite code {0}", ex.SqliteErrorCode);
+            DiagnosticLog.Write(DiagnosticLevel.Error, "prediction_query_failed", $"SQLite_{ex.SqliteErrorCode}");
             return default;
         }
     }
