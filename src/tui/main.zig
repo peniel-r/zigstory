@@ -47,6 +47,7 @@ const TuiApp = struct {
 
     selected_index: usize = 0,
     search_dirty: bool = false,
+    draw_dirty: bool = true,
 
     // Vim-like command mode
     command_mode: bool = false,
@@ -108,9 +109,6 @@ const TuiApp = struct {
 
         // Main event loop
         while (!self.should_quit) {
-            _ = self.arena.reset(.retain_capacity);
-            const frame_allocator = self.arena.allocator();
-
             // pollEvent and tryEvent now return error unions in vaxis 0.6
             try self.loop.pollEvent();
 
@@ -121,10 +119,13 @@ const TuiApp = struct {
 
             if (self.should_quit) break;
             try self.flushSearch();
-            try self.draw(frame_allocator);
-
-            try self.vx.render(self.tty.writer());
-            try self.tty.writer().flush();
+            if (self.draw_dirty) {
+                _ = self.arena.reset(.retain_capacity);
+                try self.draw(self.arena.allocator());
+                try self.vx.render(self.tty.writer());
+                try self.tty.writer().flush();
+                self.draw_dirty = false;
+            }
         }
     }
 
@@ -134,6 +135,7 @@ const TuiApp = struct {
         try self.draw(self.arena.allocator());
         try self.vx.render(self.tty.writer());
         try self.tty.writer().flush();
+        self.draw_dirty = false;
     }
 
     fn isSearching(self: *TuiApp) bool {
@@ -147,6 +149,7 @@ const TuiApp = struct {
         try self.search_state.loadPage(self.db, self.pageSize(), 0, true);
         self.scroll_state.total_count = self.search_state.total_count;
         self.search_dirty = false;
+        self.draw_dirty = true;
     }
 
     fn pageSize(self: *TuiApp) usize {
@@ -189,6 +192,10 @@ const TuiApp = struct {
 
     /// Handle keyboard and terminal events
     fn handleEvent(self: *TuiApp, event: Event) !void {
+        const before = self.visibleState();
+        defer if (!std.meta.eql(before, self.visibleState())) {
+            self.draw_dirty = true;
+        };
         switch (event) {
             .key_press => |key| {
                 // Handle command mode (vim-like ':q')
@@ -340,6 +347,7 @@ const TuiApp = struct {
                 }
             },
             .winsize => |ws| {
+                self.draw_dirty = true;
                 // Handle terminal resize
                 try self.vx.resize(self.allocator, self.tty.writer(), ws);
                 self.scroll_state.visible_rows = scrolling.ScrollingState.calculateViewport(ws.rows);
@@ -347,6 +355,26 @@ const TuiApp = struct {
             },
             else => {},
         }
+    }
+
+    fn visibleState(self: *const TuiApp) struct {
+        selected: usize,
+        scroll: usize,
+        query_length: usize,
+        command_length: usize,
+        command_mode: bool,
+        selections: usize,
+        filter: directory_filter.FilterMode,
+    } {
+        return .{
+            .selected = self.selected_index,
+            .scroll = self.scroll_state.scroll_position,
+            .query_length = self.search_state.query.items.len,
+            .command_length = self.command_buffer.items.len,
+            .command_mode = self.command_mode,
+            .selections = self.selections.items.len,
+            .filter = self.search_state.filter_state.mode,
+        };
     }
 
     fn refreshEntries(self: *TuiApp) !void {
@@ -362,6 +390,15 @@ const TuiApp = struct {
             start,
             false,
         );
+        self.draw_dirty = true;
+        self.scroll_state.total_count = self.search_state.total_count;
+        if (self.selected_index >= self.scroll_state.total_count) {
+            self.selected_index = self.scroll_state.total_count -| 1;
+            self.scroll_state.scroll_position = @min(self.scroll_state.scroll_position, self.selected_index);
+            if (self.scroll_state.scroll_position < self.search_state.results_offset) {
+                try self.search_state.loadPage(self.db, self.pageSize(), self.scroll_state.scroll_position, false);
+            }
+        }
     }
 
     /// Draw the TUI interface
@@ -748,4 +785,86 @@ test "repeated result pages reuse bounded memory and preserve literal LIKE chara
         try std.testing.expect(state.results_arena.queryCapacity() <= capacity);
         try std.testing.expectEqual(@as(usize, 300), state.total_count);
     }
+}
+
+test "ignored events and boundary navigation do not schedule redraws" {
+    const allocator = std.testing.allocator;
+    var env: std.process.Environ.Map = .init(allocator);
+    defer env.deinit();
+    var db = try createNavigationTestDb(3);
+    defer db.deinit();
+    var app: TuiApp = undefined;
+    try app.init(allocator, &db, null, std.testing.io, &env);
+    defer app.deinit();
+    app.draw_dirty = false;
+    try app.handleEvent(.focus_in);
+    try app.handleEvent(.{ .key_release = .{ .codepoint = 'a' } });
+    try app.handleEvent(.{ .key_press = .{ .codepoint = vaxis.Key.up } });
+    try std.testing.expect(!app.draw_dirty);
+    try app.handleEvent(.{ .key_press = .{ .codepoint = vaxis.Key.down } });
+    try std.testing.expect(app.draw_dirty);
+    app.draw_dirty = false;
+    try app.handleEvent(.{ .key_press = .{ .codepoint = 'x', .text = "x" } });
+    try std.testing.expect(app.draw_dirty);
+    try app.flushSearch();
+    app.draw_dirty = false;
+    try app.handleEvent(.{ .key_release = .{ .codepoint = 'x' } });
+    try std.testing.expect(!app.draw_dirty);
+}
+
+test "cached substring pages preserve ties, independent states and local writes" {
+    const allocator = std.testing.allocator;
+    var db = try createNavigationTestDb(300);
+    defer db.deinit();
+    try db.exec("INSERT INTO history VALUES(301,'duplicate','local',0,1,1000),(302,'duplicate','other',7,2,1000),(303,'duplicate','other',3,3,5)", .{}, .{});
+    var state = search_logic.SearchState.init(allocator);
+    defer state.deinit(allocator);
+    try state.query.appendSlice(allocator, "duplicate");
+    try state.loadPage(&db, 1, 0, true);
+    try std.testing.expectEqual(@as(i64, 302), state.results[0].id);
+    try std.testing.expectEqual(@as(i32, 7), state.results[0].exit_code);
+    const changes = sqlite.c.sqlite3_total_changes(db.db);
+    try state.loadPage(&db, 1, 0, false);
+    try std.testing.expectEqual(changes, sqlite.c.sqlite3_total_changes(db.db));
+    var other = search_logic.SearchState.init(allocator);
+    defer other.deinit(allocator);
+    try other.query.appendSlice(allocator, "cmd");
+    try other.loadPage(&db, 1, 0, true);
+    try state.loadPage(&db, 1, 0, false);
+    try std.testing.expectEqual(@as(i64, 302), state.results[0].id);
+    try db.exec("UPDATE history SET timestamp=2000 WHERE id=303", .{}, .{});
+    try state.loadPage(&db, 1, 0, false);
+    try std.testing.expectEqual(@as(i64, 303), state.results[0].id);
+    try db.exec("DELETE FROM history WHERE cmd='duplicate'", .{}, .{});
+    try state.loadPage(&db, 1, 0, false);
+    try std.testing.expectEqual(@as(usize, 0), state.total_count);
+    try std.testing.expectEqual(@as(usize, 0), state.results.len);
+    state.query.clearRetainingCapacity();
+    try state.loadPage(&db, 1, 0, true);
+    try std.testing.expect(state.cache_table == null);
+    try std.testing.expectEqual(@as(usize, 300), state.total_count);
+}
+
+test "read-only substring caches refresh after writes from another connection" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "history.db", .data = "" });
+    const path = try tmp.dir.realPathFileAlloc(io, "history.db", allocator);
+    defer allocator.free(path);
+    var writer = try sqlite.Db.init(.{ .mode = .{ .File = path }, .open_flags = .{ .write = true } });
+    defer writer.deinit();
+    try writer.exec("CREATE TABLE history(id INTEGER PRIMARY KEY,cmd TEXT,cwd TEXT,exit_code INTEGER,duration_ms INTEGER,timestamp INTEGER)", .{}, .{});
+    try writer.exec("INSERT INTO history VALUES(1,'match first','local',0,0,1)", .{}, .{});
+    var reader = try sqlite.Db.init(.{ .mode = .{ .File = path }, .open_flags = .{} });
+    defer reader.deinit();
+    var state = search_logic.SearchState.init(allocator);
+    defer state.deinit(allocator);
+    try state.query.appendSlice(allocator, "match");
+    try state.loadPage(&reader, 10, 0, true);
+    try writer.exec("INSERT INTO history VALUES(2,'match second','local',0,0,2)", .{}, .{});
+    try state.loadPage(&reader, 10, 0, false);
+    try std.testing.expectEqual(@as(usize, 2), state.total_count);
+    try std.testing.expectEqual(@as(i64, 2), state.results[0].id);
 }

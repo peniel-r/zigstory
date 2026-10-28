@@ -15,7 +15,7 @@ function Assert-ZigstoryUpgradeIdle {
         $parentId = [int]$parent.ParentProcessId
     }
     foreach ($process in $processes) {
-        if ($process.Name -notmatch '^(pwsh|powershell|zigstory|zigstory-tui-profile)\.exe$' -or
+        if ($process.Name -notmatch '^(pwsh|powershell|zigstory|zigstory-tui-profile|zigstory-startup-profile|zigstory-search-benchmark)\.exe$' -or
             $process.ProcessId -eq $PID) { continue }
         $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid
         if ($owner.ReturnValue -ne 0) {

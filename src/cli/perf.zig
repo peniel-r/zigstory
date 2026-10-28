@@ -40,17 +40,19 @@ pub fn run(db: *sqlite.Db, cwd_param: ?[]const u8, format_param: []const u8, thr
 }
 
 /// Get performance metrics for a directory
-fn getPerfMetrics(db: *sqlite.Db, cwd: []const u8, allocator: std.mem.Allocator) !PerfMetrics {
+pub fn getPerfMetrics(db: *sqlite.Db, cwd: []const u8, allocator: std.mem.Allocator) !PerfMetrics {
     const query =
-        \\SELECT
-        \\  AVG(duration_ms) as avg_duration,
-        \\  COALESCE(SUM(CASE WHEN exit_code = 0 THEN 1 ELSE 0 END), 0) as success,
-        \\  COUNT(*) as total,
-        \\  (SELECT duration_ms FROM history WHERE cwd = ? ORDER BY timestamp DESC, id DESC LIMIT 1) as last_duration,
-        \\  (SELECT exit_code FROM history WHERE cwd = ? ORDER BY timestamp DESC, id DESC LIMIT 1) as last_exit_code,
-        \\  (SELECT cmd FROM history WHERE cwd = ? ORDER BY timestamp DESC, id DESC LIMIT 1) as last_cmd
-        \\FROM history
-        \\WHERE cwd = ?
+        \\WITH latest AS (
+        \\  SELECT duration_ms,exit_code,cmd FROM history
+        \\  WHERE cwd = ? ORDER BY timestamp DESC,id DESC LIMIT 1
+        \\)
+        \\SELECT totals.avg_duration,totals.success,totals.total,
+        \\  latest.duration_ms AS last_duration,latest.exit_code AS last_exit_code,latest.cmd AS last_cmd
+        \\FROM (
+        \\  SELECT AVG(duration_ms) AS avg_duration,
+        \\    COALESCE(SUM(CASE WHEN exit_code = 0 THEN 1 ELSE 0 END),0) AS success,
+        \\    COUNT(*) AS total FROM history WHERE cwd = ?
+        \\) AS totals LEFT JOIN latest ON 1
     ;
 
     var stmt = try db.prepare(query);
@@ -70,7 +72,7 @@ fn getPerfMetrics(db: *sqlite.Db, cwd: []const u8, allocator: std.mem.Allocator)
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 
-    var iter = try stmt.iterator(Row, .{ cwd, cwd, cwd, cwd });
+    var iter = try stmt.iterator(Row, .{ cwd, cwd });
     const row = (try iter.nextAlloc(arena_alloc, .{})) orelse {
         return PerfMetrics{
             .avg_duration_ms = 0.0,

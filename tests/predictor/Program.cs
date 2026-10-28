@@ -3,6 +3,13 @@ using System.Management.Automation.Subsystem.Prediction;
 using Microsoft.Data.Sqlite;
 using zigstoryPredictor;
 
+if (args.Length > 0 && args[0] == "--performance-check")
+{
+    if (args.Length != 4) throw new ArgumentException("Usage: --performance-check <zigstory.exe> <zigstory-tui-profile.exe> <zigstory-search-benchmark.exe>");
+    PerformanceChecks.Run(args[1], args[2], args[3]);
+    return;
+}
+
 if (args.Length > 0 && args[0] == "--profile")
 {
     if (args.Length != 4) throw new ArgumentException("Usage: --profile <history.db> <zigstory.exe> <zigstory-tui-profile.exe>");
@@ -33,6 +40,19 @@ try
         var before = File.ReadAllText(logPath);
         DiagnosticLog.Write(DiagnosticLevel.Error, "disabled");
         Check(File.ReadAllText(logPath) == before, "Predictor honors Off");
+        Environment.SetEnvironmentVariable("ZIGSTORY_LOG_LEVEL", "Error");
+        Environment.SetEnvironmentVariable("ZIGSTORY_LOG_DIR", " ");
+        using var errors = new StringWriter();
+        using var errorListener = new TextWriterTraceListener(errors);
+        Trace.Listeners.Add(errorListener);
+        try
+        {
+            DiagnosticLog.Write(DiagnosticLevel.Error, "invalid_directory");
+            Trace.Flush();
+            Check(errors.ToString().Contains("Zigstory logging failed"),
+                "Invalid log paths emit diagnostics instead of disrupting prediction");
+        }
+        finally { Trace.Listeners.Remove(errorListener); }
     }
     finally
     {

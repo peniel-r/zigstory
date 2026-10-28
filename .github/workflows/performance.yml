@@ -1,0 +1,39 @@
+name: Windows correctness and performance
+on:
+  push:
+    branches: [main, performance_optimizations]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regressions:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Prepare pinned dependencies and compatibility patch
+        run: .\scripts\prepare-dependencies.ps1
+      - name: Debug regressions
+        run: zig build test --summary all
+      - name: Release regressions
+        run: zig build test -Doptimize=ReleaseFast --summary all
+      - name: Build and verify application
+        run: zig build run -Doptimize=ReleaseFast
+      - name: Functional, JSON, recording, upgrade and logging checks
+        run: .\tests\run_tests.ps1 -SkipBuild
+      - name: Predictor regressions
+        run: dotnet run --project tests\predictor\PredictorRegressionTests.csproj -c Release
+      - name: Build profiling tools
+        run: zig build profile-tools -Doptimize=ReleaseFast
+      - name: Synthetic performance budgets
+        run: dotnet run --project tests\predictor\PredictorRegressionTests.csproj -c Release --no-build -- --performance-check "$PWD\zig-out\bin\zigstory.exe" "$PWD\zig-out\bin\zigstory-tui-profile.exe" "$PWD\zig-out\bin\zigstory-search-benchmark.exe"

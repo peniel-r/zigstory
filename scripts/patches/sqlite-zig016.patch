@@ -1,0 +1,416 @@
+diff --git a/build.zig b/build.zig
+index b0938b9..701635e 100644
+--- a/build.zig
++++ b/build.zig
+@@ -121,15 +121,15 @@ fn makeSQLiteLib(b: *std.Build, dep: *std.Build.Dependency, c_flags: []const []c
+         .root_module = mod,
+     });
+ 
+-    lib.addIncludePath(dep.path("."));
+-    lib.addIncludePath(b.path("c"));
++    lib.root_module.addIncludePath(dep.path("."));
++    lib.root_module.addIncludePath(b.path("c"));
+     if (sqlite_c == .with) {
+-        lib.addCSourceFile(.{
++        mod.addCSourceFile(.{
+             .file = dep.path("sqlite3.c"),
+             .flags = c_flags,
+         });
+     }
+-    lib.addCSourceFile(.{
++    mod.addCSourceFile(.{
+         .file = b.path("c/workaround.c"),
+         .flags = c_flags,
+     });
+@@ -154,7 +154,7 @@ pub fn build(b: *std.Build) !void {
+ 
+     // Define C flags to use
+ 
+-    var flags: std.ArrayList([]const u8) = .{};
++    var flags: std.ArrayList([]const u8) = .empty;
+     defer flags.deinit(b.allocator);
+     try flags.append(b.allocator, "-std=c99");
+ 
+@@ -242,9 +242,9 @@ pub fn build(b: *std.Build) !void {
+             .name = test_name,
+             .root_module = mod,
+         });
+-        tests.addIncludePath(b.path("c"));
+-        tests.addIncludePath(sqlite_dep.path("."));
+-        tests.linkLibrary(test_sqlite_lib);
++        tests.root_module.addIncludePath(b.path("c"));
++        tests.root_module.addIncludePath(sqlite_dep.path("."));
++        tests.root_module.linkLibrary(test_sqlite_lib);
+ 
+         const tests_options = b.addOptions();
+         tests.root_module.addImport("build_options", tests_options.createModule());
+@@ -374,7 +374,8 @@ const PreprocessStep = struct {
+         const loadable_sqlite3_h = try ps.target.path(owner, "loadable-ext-sqlite3.h").getPath3(owner, step).toString(owner.allocator);
+         const loadable_sqlite3ext_h = try ps.target.path(owner, "loadable-ext-sqlite3ext.h").getPath3(owner, step).toString(owner.allocator);
+ 
+-        try Preprocessor.sqlite3(owner.allocator, sqlite3_h, loadable_sqlite3_h);
+-        try Preprocessor.sqlite3ext(owner.allocator, sqlite3ext_h, loadable_sqlite3ext_h);
++        const io = owner.graph.io;
++        try Preprocessor.sqlite3(owner.allocator, io, sqlite3_h, loadable_sqlite3_h);
++        try Preprocessor.sqlite3ext(owner.allocator, io, sqlite3ext_h, loadable_sqlite3ext_h);
+     }
+ };
+diff --git a/build/Preprocessor.zig b/build/Preprocessor.zig
+index f3d0dc6..e44d6fa 100644
+--- a/build/Preprocessor.zig
++++ b/build/Preprocessor.zig
+@@ -24,14 +24,9 @@ const mem = std.mem;
+ // This works but it requires fairly extensive modifications of both sqlite3.h and sqlite3ext.h which is time consuming to do manually;
+ // this tool is intended to automate all these modifications.
+ 
+-fn readOriginalData(allocator: mem.Allocator, path: []const u8) ![]const u8 {
+-    var file = try std.fs.cwd().openFile(path, .{});
+-    defer file.close();
+-    var buf: [1024]u8 = undefined;
+-    var reader = file.reader(&buf);
+-
+-    const data = reader.interface.readAlloc(allocator, 1024 * 1024);
+-    return data;
++fn readOriginalData(allocator: mem.Allocator, io: std.Io, path: []const u8) ![]const u8 {
++    // Use Dir.readFileAlloc to read the file into an allocator-managed buffer.
++    return try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024));
+ }
+ 
+ const Processor = struct {
+@@ -121,19 +116,19 @@ const Processor = struct {
+         });
+     }
+ 
+-    fn dump(self: *Processor, writer: anytype) !void {
++    fn dump(self: *Processor, writer: *std.Io.Writer) !void {
+         var pos: usize = 0;
+         for (self.ranges.items) |range| {
+             switch (range) {
+                 .delete => |dr| {
+                     const to_write = self.data[pos..dr.start];
+-                    try writer.interface.writeAll(to_write);
++                    try writer.writeAll(to_write);
+                     pos = dr.end;
+                 },
+                 .replace => |rr| {
+                     const to_write = self.data[pos..rr.start];
+-                    try writer.interface.writeAll(to_write);
+-                    try writer.interface.writeAll(rr.replacement);
++                    try writer.writeAll(to_write);
++                    try writer.writeAll(rr.replacement);
+                     pos = rr.end;
+                 },
+             }
+@@ -148,13 +143,13 @@ const Processor = struct {
+         // Finally append the remaining data in the buffer (the last range will probably not be the end of the file)
+         if (pos < self.data.len) {
+             const remaining_data = self.data[pos..];
+-            try writer.interface.writeAll(remaining_data);
++            try writer.writeAll(remaining_data);
+         }
+     }
+ };
+ 
+-pub fn sqlite3(allocator: mem.Allocator, input_path: []const u8, output_path: []const u8) !void {
+-    const data = try readOriginalData(allocator, input_path);
++pub fn sqlite3(allocator: mem.Allocator, io: std.Io, input_path: []const u8, output_path: []const u8) !void {
++    const data = try readOriginalData(allocator, io, input_path);
+ 
+     var processor = try Processor.init(allocator, data);
+ 
+@@ -192,17 +187,18 @@ pub fn sqlite3(allocator: mem.Allocator, input_path: []const u8, output_path: []
+ 
+     // Write the result
+ 
+-    var output_file = try std.fs.cwd().createFile(output_path, .{ .mode = 0o0644 });
+-    defer output_file.close();
++    const output_file = try std.Io.Dir.cwd().createFile(io, output_path, .{ .permissions = std.Io.File.Permissions.default_file });
++    defer std.Io.File.close(output_file, io);
+ 
+-    try output_file.writeAll("/* sqlite3.h edited by the zig-sqlite build script */\n");
+     var buf: [1024]u8 = undefined;
+-    var out_writer = output_file.writer(&buf);
+-    try processor.dump(&out_writer);
++    var out_file_writer = std.Io.File.writer(output_file, io, &buf);
++    var out_writer: *std.Io.Writer = &out_file_writer.interface;
++    try out_writer.writeAll("/* sqlite3.h edited by the zig-sqlite build script */\n");
++    try processor.dump(out_writer);
+ }
+ 
+-pub fn sqlite3ext(allocator: mem.Allocator, input_path: []const u8, output_path: []const u8) !void {
+-    const data = try readOriginalData(allocator, input_path);
++pub fn sqlite3ext(allocator: mem.Allocator, io: std.Io, input_path: []const u8, output_path: []const u8) !void {
++    const data = try readOriginalData(allocator, io, input_path);
+ 
+     var processor = try Processor.init(allocator, data);
+ 
+@@ -230,11 +226,12 @@ pub fn sqlite3ext(allocator: mem.Allocator, input_path: []const u8, output_path:
+ 
+     // Write the result
+ 
+-    var output_file = try std.fs.cwd().createFile(output_path, .{ .mode = 0o0644 });
+-    defer output_file.close();
++    const output_file = try std.Io.Dir.cwd().createFile(io, output_path, .{ .permissions = std.Io.File.Permissions.default_file });
++    defer std.Io.File.close(output_file, io);
+ 
+-    try output_file.writeAll("/* sqlite3ext.h edited by the zig-sqlite build script */\n");
+     var buf: [1024]u8 = undefined;
+-    var out_writer = output_file.writer(&buf);
+-    try processor.dump(&out_writer);
++    var out_file_writer = std.Io.File.writer(output_file, io, &buf);
++    var out_writer: *std.Io.Writer = &out_file_writer.interface;
++    try out_writer.writeAll("/* sqlite3ext.h edited by the zig-sqlite build script */\n");
++    try processor.dump(out_writer);
+ }
+diff --git a/query.zig b/query.zig
+index 3f33e08..3cd07f1 100644
+--- a/query.zig
++++ b/query.zig
+@@ -166,11 +166,7 @@ pub fn ParsedQuery(comptime tmp_query: []const u8) type {
+                             // Handles optional types
+                             const typ = if (type_info_string[0] == '?') blk: {
+                                 const child_type = ParseType(type_info_string[1..]);
+-                                break :blk @Type(std.builtin.Type{
+-                                    .optional = .{
+-                                        .child = child_type,
+-                                    },
+-                                });
++                                break :blk ?child_type;
+                             } else blk: {
+                                 break :blk ParseType(type_info_string);
+                             };
+@@ -227,14 +223,15 @@ fn ParseType(comptime type_info: []const u8) type {
+     if (mem.eql(u8, "isize", type_info)) return isize;
+ 
+     if (type_info[0] == 'u' or type_info[0] == 'i') {
+-        return @Type(std.builtin.Type{
+-            .int = std.builtin.Type.Int{
+-                .signedness = if (type_info[0] == 'i') .signed else .unsigned,
+-                .bits = std.fmt.parseInt(usize, type_info[1..type_info.len], 10) catch {
+-                    @compileError("invalid type info " ++ type_info);
+-                },
+-            },
+-        });
++        const bits = comptime std.fmt.parseInt(usize, type_info[1..type_info.len], 10) catch @compileError("invalid type info " ++ type_info);
++        return comptime switch (bits) {
++            8 => if (type_info[0] == 'i') i8 else u8,
++            16 => if (type_info[0] == 'i') i16 else u16,
++            32 => if (type_info[0] == 'i') i32 else u32,
++            64 => if (type_info[0] == 'i') i64 else u64,
++            128 => if (type_info[0] == 'i') i128 else u128,
++            else => @compileError("unsupported integer bit width: " ++ std.fmt.comptimePrint("{d}", .{bits})),
++        };
+     }
+ 
+     // Float
+diff --git a/sqlite.zig b/sqlite.zig
+index dcf05a1..8fe9155 100644
+--- a/sqlite.zig
++++ b/sqlite.zig
+@@ -524,7 +524,11 @@ pub const Db = struct {
+         break :blk StatementType(.{}, query);
+     } {
+         @setEvalBranchQuota(100000);
+-        return StatementType(.{}, query).prepare(self, options, 0);
++        // Under Zig 0.16 ParsedQuery(...).getQuery() may return an empty slice
++        // due to comptime-array materialisation issues.  Pass the original
++        // `query` literal directly so SQLite receives the correct SQL text.
++        const dynamic = try DynamicStatement.prepare(self, query, options, 0);
++        return StatementType(.{}, query){ .dynamic_stmt = dynamic };
+     }
+ 
+     /// prepareDynamicWithDiags is like `prepareDynamic` but takes an additional options argument.
+@@ -551,7 +555,10 @@ pub const Db = struct {
+         break :blk StatementType(.{}, query);
+     } {
+         @setEvalBranchQuota(100000);
+-        return StatementType(.{}, query).prepare(self, .{}, 0);
++        // Same fix as prepareWithDiags: bypass getQuery() to avoid the
++        // Zig 0.16 comptime-array materialisation bug.
++        const dynamic = try DynamicStatement.prepare(self, query, .{}, 0);
++        return StatementType(.{}, query){ .dynamic_stmt = dynamic };
+     }
+ 
+     /// prepareDynamic prepares a dynamic statement for the `query` provided.
+@@ -816,7 +823,12 @@ pub const Db = struct {
+             const new_query = std.mem.span(sql_tail);
+             if (new_query.len == 0) return;
+ 
+-            var stmt = try DynamicStatement.prepareWithTail(self, new_query, options, 0, &sql_tail);
++            var stmt = DynamicStatement.prepareWithTail(self, new_query, options, 0, &sql_tail) catch |err| {
++                // EmptyQuery means the remaining SQL is whitespace/comments only –
++                // treat as end of input rather than a hard error.
++                if (err == error.EmptyQuery) return;
++                return err;
++            };
+             defer stmt.deinit();
+ 
+             try stmt.exec(options, .{});
+@@ -1469,8 +1481,16 @@ pub fn Iterator(comptime Type: type) type {
+                         @compileError("enum column " ++ @typeName(FieldType) ++ " must have a BaseType of either string or int");
+                     },
+                     inline .@"struct", .@"union" => |TI| {
+-                        if (TI.layout == .@"packed" and !@hasField(FieldType, "readField")) {
+-                            const Backing = @Type(.{ .int = .{ .signedness = .unsigned, .bits = @bitSizeOf(FieldType) } });
++                            if (TI.layout == .@"packed" and !@hasField(FieldType, "readField")) {
++                            const bits = comptime @bitSizeOf(FieldType);
++                            const Backing = comptime switch (bits) {
++                                8 => u8,
++                                16 => u16,
++                                32 => u32,
++                                64 => u64,
++                                128 => u128,
++                                else => @compileError("unsupported backing integer size: " ++ std.fmt.comptimePrint("{d}", .{bits})),
++                            };
+                             return @bitCast(self.readInt(Backing, i));
+                         }
+ 
+@@ -1553,20 +1573,39 @@ pub const DynamicStatement = struct {
+         var dummy_diags = Diagnostics{};
+         var diags = options.diags orelse &dummy_diags;
+         const stmt = blk: {
+-            var tmp: ?*c.sqlite3_stmt = undefined;
+-            const result = c.sqlite3_prepare_v3(
+-                db.db,
+-                query.ptr,
+-                @intCast(query.len),
+-                flags,
+-                &tmp,
+-                tail,
+-            );
+-            if (result != c.SQLITE_OK) {
++            // Under Zig 0.16 on Windows x64 the compiler may constant-fold
++            // the null-check below, treating `tmp` as always null even after
++            // the C call writes a valid pointer to it.  We break the
++            // optimisation boundary with a noinline wrapper so the read of
++            // `tmp` after the call is not eliminated.
++            const CallResult = struct {
++                rc:   c_int,
++                stmt: ?*c.sqlite3_stmt,
++            };
++            const Wrapper = struct {
++                noinline fn call(
++                    db_handle: *c.sqlite3,
++                    sql_ptr:   [*c]const u8,
++                    tail_ptr:  ?*[*c]const u8,
++                ) CallResult {
++                    var out: ?*c.sqlite3_stmt = null;
++                    const rc = c.sqlite3_prepare_v2(
++                        db_handle,
++                        sql_ptr,
++                        @as(c_int, -1), // null-terminated; avoids @intCast width bug
++                        &out,
++                        if (tail_ptr) |t| t else null,
++                    );
++                    return .{ .rc = rc, .stmt = out };
++                }
++            };
++            const call_res = Wrapper.call(db.db, query.ptr, tail);
++            _ = flags;
++            if (call_res.rc != c.SQLITE_OK) {
+                 diags.err = getLastDetailedErrorFromDb(db.db);
+-                return errors.errorFromResultCode(result);
++                return errors.errorFromResultCode(call_res.rc);
+             }
+-            if (tmp == null) {
++            if (call_res.stmt == null) {
+                 diags.err = .{
+                     .code = 0,
+                     .near = -1,
+@@ -1574,7 +1613,7 @@ pub const DynamicStatement = struct {
+                 };
+                 return error.EmptyQuery;
+             }
+-            break :blk tmp.?;
++            break :blk call_res.stmt.?;
+         };
+         return Self{
+             .db = db.db,
+@@ -1700,11 +1739,19 @@ pub const DynamicStatement = struct {
+                     try self.bindField(FieldType.BaseType, options, field_name, i, field_value);
+                 },
+                 .@"union" => |info| {
+-                    if (info.layout == .@"packed") {
+-                        const Backing = @Type(.{ .int = .{ .signedness = .unsigned, .bits = @bitSizeOf(FieldType) } });
+-                        try self.bindField(Backing, options, field_name, i, @as(Backing, @bitCast(field)));
+-                        return;
+-                    }
++                        if (info.layout == .@"packed") {
++                            const bits = comptime @bitSizeOf(FieldType);
++                            const Backing = comptime switch (bits) {
++                                8 => u8,
++                                16 => u16,
++                                32 => u32,
++                                64 => u64,
++                                128 => u128,
++                                else => @compileError("unsupported backing integer size: " ++ std.fmt.comptimePrint("{d}", .{bits})),
++                            };
++                            try self.bindField(Backing, options, field_name, i, @as(Backing, @bitCast(field)));
++                            return;
++                        }
+                     if (info.tag_type) |UnionTagType| {
+                         inline for (info.fields) |u_field| {
+                             // This wasn't entirely obvious when I saw code like this elsewhere, it works because of type coercion.
+@@ -1967,7 +2014,7 @@ pub const DynamicStatement = struct {
+     pub fn all(self: *Self, comptime Type: type, allocator: mem.Allocator, options: QueryOptions, values: anytype) ![]Type {
+         var iter = try self.iteratorAlloc(Type, allocator, values);
+ 
+-        var rows: std.ArrayList(Type) = .{};
++        var rows: std.ArrayList(Type) = .empty;
+         while (try iter.nextAlloc(allocator, options)) |row| {
+             try rows.append(allocator, row);
+         }
+@@ -2257,7 +2304,7 @@ pub fn Statement(comptime opts: StatementOptions, comptime query: anytype) type
+         pub fn all(self: *Self, comptime Type: type, allocator: mem.Allocator, options: QueryOptions, values: anytype) ![]Type {
+             var iter = try self.iteratorAlloc(Type, allocator, values);
+ 
+-            var rows: std.ArrayList(Type) = .{};
++            var rows: std.ArrayList(Type) = .empty;
+             while (try iter.nextAlloc(allocator, options)) |row| {
+                 try rows.append(allocator, row);
+             }
+@@ -3020,7 +3067,7 @@ test "sqlite: statement iterator" {
+     var stmt = try db.prepare("INSERT INTO user(name, id, age, weight, favorite_color) VALUES(?{[]const u8}, ?{usize}, ?{usize}, ?{f32}, ?{[]const u8})");
+     defer stmt.deinit();
+ 
+-    var expected_rows: std.ArrayList(TestUser) = .{};
++    var expected_rows: std.ArrayList(TestUser) = .empty;
+     var i: usize = 0;
+     while (i < 20) : (i += 1) {
+         const name = try std.fmt.allocPrint(allocator, "Vincent {d}", .{i});
+@@ -3047,7 +3094,7 @@ test "sqlite: statement iterator" {
+ 
+         var iter = try stmt2.iterator(RowType, .{});
+ 
+-        var rows: std.ArrayList(RowType) = .{};
++        var rows: std.ArrayList(RowType) = .empty;
+         while (try iter.next(.{})) |row| {
+             try rows.append(allocator, row);
+         }
+@@ -3074,7 +3121,7 @@ test "sqlite: statement iterator" {
+ 
+         var iter = try stmt2.iterator(RowType, .{});
+ 
+-        var rows: std.ArrayList(RowType) = .{};
++        var rows: std.ArrayList(RowType) = .empty;
+         while (try iter.nextAlloc(allocator, .{})) |row| {
+             try rows.append(allocator, row);
+         }
+@@ -3459,7 +3506,7 @@ test "sqlite: bind runtime slice" {
+     const allocator = arena.allocator();
+ 
+     // creating array list on heap so that it's deemed runtime size
+-    var list: std.ArrayList([]const u8) = .{};
++    var list: std.ArrayList([]const u8) = .empty;
+     defer list.deinit(allocator);
+     try list.append(allocator, "this is some data");
+     const args = try list.toOwnedSlice(allocator);
+@@ -3877,7 +3924,7 @@ test "sqlite: empty slice" {
+     defer db.deinit();
+     try addTestData(&db);
+ 
+-    var list: std.ArrayList(u8) = .{};
++    var list: std.ArrayList(u8) = .empty;
+     const ptr = try list.toOwnedSlice(allocator);
+ 
+     try db.exec("INSERT INTO article(author_id, data) VALUES(?, ?)", .{}, .{ 1, ptr });

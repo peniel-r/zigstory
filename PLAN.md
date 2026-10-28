@@ -130,12 +130,12 @@ unavailable because the installed tool rejects the documented `impact` command.
 - [x] Add rotating local logs to CLI/TUI, PowerShell and predictor, defaulting to
   Error; exclude commands and history contents. Validate and commit logging first
   as explicitly requested (no push requested).
-- [ ] Correct Unicode truncation/highlight columns and imported-history chronology.
-- [ ] Replace per-cell fills and avoid redraws without visible state changes.
-- [ ] Split startup measurements into process, database and query costs; optimize
+- [x] Correct Unicode truncation/highlight columns and imported-history chronology.
+- [x] Replace per-cell fills and avoid redraws without visible state changes.
+- [x] Split startup measurements into process, database and query costs; optimize
   measured bottlenecks rather than assuming a slow SQL query.
-- [ ] Benchmark and improve literal substring counts/grouping/deep pagination.
-- [ ] Add repeatable Windows CI performance gates and final regression validation.
+- [x] Benchmark and improve literal substring counts/grouping/deep pagination.
+- [x] Add repeatable Windows CI performance gates and final regression validation.
 
 Immediate recording remains required; batching and persistent-writer architecture
 are excluded. Leave subsequent optimizations uncommitted pending review.
@@ -144,3 +144,52 @@ Logging validation passed: 21 core/TUI regressions, the complete PowerShell runn
 (including 12 new logging checks), predictor regressions and ReleaseFast
 `zig build run`. The user explicitly requested committing logging before the
 remaining optimization work; no installation or push is part of this step.
+
+Logging was committed locally as `9f4c1b2`. Subsequent optimizations remain
+uncommitted for review, including a small logging correction that preserves
+console errors/warnings when persistent logging is disabled.
+
+The remaining pass implements cell-aware grapheme truncation/highlighting, bulk
+screen/row fills, visible-state redraw suppression and chronological PSReadLine
+imports. Literal searches materialize deduplicated IDs in per-state SQLite TEMP
+tables, invalidate after detected local/external writes, and page by indexed
+position. Latest-row selection now uses timestamp then ID consistently, including
+nonmonotonic timestamps and ties. Clearing the query releases its TEMP table.
+Result strings stay page-bounded; SQLite TEMP storage still grows with matches.
+No new persistent migration or recording batching is introduced.
+
+Warm 100k-row, 25k-distinct synthetic substring measurements:
+
+| Measurement | Previous | Cached-ID implementation |
+| --- | --- | --- |
+| Initial query median | 55.67 ms | 59.14 ms |
+| Deep page at offset 24,900 median | 42.68 ms | 0.039 ms |
+| Next page median | 38.43 ms | 0.030 ms |
+
+The initial query costs roughly 6% more; the gain is avoiding repeated grouping
+and deep OFFSET work. SQLite fixture/cache peak was 10,752,184 bytes; result arena
+was 22,412 bytes. Headless rendering was approximately 1.06 ms on a 4,113-row local
+snapshot versus the earlier 4.27 ms on 4,108 rows; this is not an exact controlled
+before/after comparison.
+
+A validated synthetic profile: CLI empty metrics median 178.02 ms, help-only 174.26 ms;
+internal runtime/environment/database/query/shutdown medians total about 3.11 ms.
+External process launch/loading overhead remains unresolved; no specific host
+component is blamed. Broad/narrow TUI searches peaked at 237 loaded rows and a
+98,316-byte result arena in both halves. Headless frame median/p95 were
+1.41/2.01 ms; sampled process working set peaked at 26,939,392 bytes.
+
+`just prepare` applies the checked-in four-file Zig 0.16 SQLite compatibility patch
+without overwriting divergent local changes. Pristine fetch/patch/ReleaseFast
+tests and repeated preparation were verified. `just performance` builds all three
+profiling tools and passes synthetic correctness/latency/memory gates. The Windows
+workflow runs preparation, regressions and budgets, but has not yet run remotely.
+
+Final validation passed: 26 core/TUI regressions in both Debug and ReleaseFast;
+73 functional checks (five existing skips), 14 JSON checks, 32 recording checks,
+isolated safe-upgrade regressions, 13 logging checks, predictor regressions and
+synthetic performance budgets. `zig build run -Doptimize=ReleaseFast` succeeded.
+Formatting and tracked diff checks passed. Temporary investigation artifacts were
+removed. Engram synchronization was attempted, but the installed tool also rejects
+the documented `sync` command. No installed files were changed, and neither the
+logging commit nor these subsequent changes were pushed.

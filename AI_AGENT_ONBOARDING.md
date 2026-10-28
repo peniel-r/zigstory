@@ -565,8 +565,8 @@ $PSVersionTable.PSVersion
 ### Fetch Dependencies
 
 ```powershell
-# Download and cache all declared dependencies
-zig build --fetch
+# Download pinned dependencies and apply the checked-in SQLite compatibility patch
+just prepare
 ```
 
 ### Build
@@ -590,7 +590,17 @@ zig build run -- add --cmd "ls" --cwd "C:\\" --exit 0 --duration 5
 
 ```powershell
 zig build test
+just performance             # Synthetic 100k-row latency/memory regression gates
 ```
+
+`just prepare` requires exactly Zig 0.16.0 and Git; ordinary dependency fetching
+alone does not apply the required compatibility patch. See `docs\sqlite-patch.md`.
+`profile-tools` builds headless TUI, internal-startup and substring benchmarks.
+Search pages cache deduplicated IDs in per-state SQLite TEMP tables; command
+strings remain page-bounded, but TEMP storage scales with matches. Destroy search
+states before their database connection. Query/filter changes must request a
+recount; paging detects committed database changes. Unicode drawing uses cell
+widths and complete graphemes, and unchanged input does not redraw.
 
 > **Work is NOT complete until `zig build run` succeeds without errors.**
 > If the build fails, investigate, fix, and retry before marking any task done.

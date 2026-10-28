@@ -96,19 +96,42 @@ pub fn formatDuration(duration_ms: i64, buf: []u8) ?[]const u8 {
     return std.fmt.bufPrint(buf, "[{d}h]", .{hours}) catch "[?h]";
 }
 
-pub fn truncateDirectory(path: []const u8, max_len: usize, buf: []u8) []const u8 {
-    if (path.len <= max_len) {
+pub fn prefixByCells(win: vaxis.Window, text: []const u8, max_cells: usize) []const u8 {
+    var iter = vaxis.unicode.graphemeIterator(text);
+    var cells: usize = 0;
+    var end: usize = 0;
+    while (iter.next()) |grapheme| {
+        const bytes = grapheme.bytes(text);
+        if (std.mem.indexOfAny(u8, bytes, "\r\n") != null) break;
+        const width = win.gwidth(bytes);
+        if (cells + width > max_cells) break;
+        cells += width;
+        end = grapheme.start + bytes.len;
+    }
+    return text[0..end];
+}
+
+pub fn truncateDirectory(win: vaxis.Window, path: []const u8, max_cells: usize, buf: []u8) []const u8 {
+    if (win.gwidth(path) <= max_cells and path.len <= buf.len) {
         @memcpy(buf[0..path.len], path);
         return buf[0..path.len];
     }
-    if (max_len <= 2) return "..";
-
-    const chars_to_keep = max_len - 2;
-    const start = path.len - chars_to_keep;
+    if (max_cells <= 2 or buf.len <= 2) return ".."[0..@min(max_cells, @min(buf.len, 2))];
+    var iter = vaxis.unicode.graphemeIterator(path);
+    var remaining_cells: usize = win.gwidth(path);
+    var start: usize = path.len;
+    while (iter.next()) |grapheme| {
+        const suffix = path[grapheme.start..];
+        if (remaining_cells <= max_cells - 2 and suffix.len <= buf.len - 2) {
+            start = grapheme.start;
+            break;
+        }
+        remaining_cells -|= win.gwidth(grapheme.bytes(path));
+    }
     buf[0] = '.';
     buf[1] = '.';
-    @memcpy(buf[2 .. 2 + chars_to_keep], path[start..]);
-    return buf[0 .. 2 + chars_to_keep];
+    @memcpy(buf[2 .. 2 + path.len - start], path[start..]);
+    return buf[0 .. 2 + path.len - start];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -116,18 +139,12 @@ pub fn truncateDirectory(path: []const u8, max_len: usize, buf: []u8) []const u8
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn fillRowBackground(win: vaxis.Window, row: u16, style: vaxis.Style) void {
-    var x: u16 = 0;
-    while (x < win.width) : (x += 1) {
-        _ = win.printSegment(.{ .text = " ", .style = style }, .{ .row_offset = row, .col_offset = x });
-    }
+    if (row >= win.height) return;
+    win.child(.{ .y_off = row, .height = 1 }).fill(.{ .style = style });
 }
 
 pub fn fillScreen(win: vaxis.Window) void {
-    const style = vaxis.Style{ .bg = colors.bg_primary };
-    var y: u16 = 0;
-    while (y < win.height) : (y += 1) {
-        fillRowBackground(win, y, style);
-    }
+    win.fill(.{ .style = .{ .bg = colors.bg_primary } });
 }
 
 pub fn renderEntry(
@@ -164,7 +181,7 @@ pub fn renderEntry(
     };
 
     // Fill row with background
-    fillRowBackground(win, row, base_style);
+    if (is_cursor_on_row) fillRowBackground(win, row, base_style);
 
     // Column 0-1: Selection indicator
     const indicator_style = vaxis.Style{
@@ -179,28 +196,24 @@ pub fn renderEntry(
     const ind_raw = std.fmt.bufPrint(&ind_buf, "{s}{s} ", .{ cursor_ind, select_ind }) catch "> [x] ";
     const indicator = try allocator.dupe(u8, ind_raw);
 
-    _ = win.printSegment(.{ .text = indicator, .style = indicator_style }, .{ .row_offset = row, .col_offset = 0 });
+    _ = win.printSegment(.{ .text = indicator, .style = indicator_style }, .{ .row_offset = row, .col_offset = 0, .wrap = .none });
 
     var time_buf: [32]u8 = undefined;
     const time_raw = formatRelativeTime(entry.timestamp, &time_buf, now);
     const time_text = try allocator.dupe(u8, time_raw);
-    _ = win.printSegment(.{ .text = time_text, .style = dimmed_style }, .{ .row_offset = row, .col_offset = 6 });
+    _ = win.printSegment(.{ .text = time_text, .style = dimmed_style }, .{ .row_offset = row, .col_offset = 6, .wrap = .none });
 
     // Column 16-25: Duration (9 chars, only if > 1s)
     var dur_buf: [32]u8 = undefined;
     if (formatDuration(entry.duration_ms, &dur_buf)) |dur_raw| {
         const dur_text = try allocator.dupe(u8, dur_raw);
-        _ = win.printSegment(.{ .text = dur_text, .style = duration_style }, .{ .row_offset = row, .col_offset = 16 });
+        _ = win.printSegment(.{ .text = dur_text, .style = duration_style }, .{ .row_offset = row, .col_offset = 16, .wrap = .none });
     }
 
     // Column 25+: Command (rest of line)
     const cmd_start: u16 = 25;
-    const max_cmd_len: usize = if (term_width > cmd_start + 2) term_width - cmd_start - 2 else 20;
-
-    var display_cmd = entry.cmd;
-    if (display_cmd.len > max_cmd_len) {
-        display_cmd = display_cmd[0..max_cmd_len];
-    }
+    const max_cmd_len: usize = term_width -| (cmd_start + 2);
+    const display_cmd = prefixByCells(win, entry.cmd, max_cmd_len);
 
     if (search_query) |query| {
         if (query.len > 0) {
@@ -225,13 +238,26 @@ fn renderHighlightedText(
 ) void {
     const match_idx = findCaseInsensitive(text, query);
 
-    if (match_idx) |idx| {
+    if (match_idx) |byte_idx| {
+        // A substring can start inside a combining/ZWJ cluster. Highlight the
+        // complete cluster so rendering never receives a partial grapheme.
+        var idx = byte_idx;
+        var match_end = byte_idx + query.len;
+        var iter = vaxis.unicode.graphemeIterator(text);
+        while (iter.next()) |grapheme| {
+            const end = grapheme.start + grapheme.bytes(text).len;
+            if (grapheme.start <= byte_idx and end > byte_idx) idx = grapheme.start;
+            if (grapheme.start < match_end and end >= match_end) {
+                match_end = end;
+                break;
+            }
+        }
         var col = start_col;
 
         // Pre-match
         if (idx > 0) {
             _ = win.printSegment(.{ .text = text[0..idx], .style = base_style }, .{ .row_offset = row, .col_offset = col });
-            col += @intCast(idx);
+            col += win.gwidth(text[0..idx]);
         }
 
         // Match
@@ -240,9 +266,8 @@ fn renderHighlightedText(
             .bg = if (is_selected) colors.fg_highlight else base_bg,
             .bold = true,
         };
-        const match_end = @min(idx + query.len, text.len);
         _ = win.printSegment(.{ .text = text[idx..match_end], .style = highlight_style }, .{ .row_offset = row, .col_offset = col });
-        col += @intCast(match_end - idx);
+        col += win.gwidth(text[idx..match_end]);
 
         // Post-match
         if (match_end < text.len) {
@@ -284,7 +309,7 @@ pub fn renderTitleBar(win: vaxis.Window) void {
     fillRowBackground(win, 0, title_style);
     const title_len: u16 = @intCast(title.len);
     const title_start: u16 = if (win.width > title_len) (win.width - title_len) / 2 else 0;
-    _ = win.printSegment(.{ .text = title, .style = title_style }, .{ .col_offset = title_start, .row_offset = 0 });
+    _ = win.printSegment(.{ .text = title, .style = title_style }, .{ .col_offset = title_start, .row_offset = 0, .wrap = .none });
 }
 
 pub fn renderStatusBar(
@@ -345,7 +370,7 @@ pub fn renderStatusBar(
     // Duplicate status_text to ensure it survives the frame
     const status_safe = try allocator.dupe(u8, status_text);
     const style = if (command_mode) command_style else search_style;
-    _ = win.printSegment(.{ .text = status_safe, .style = style }, .{ .row_offset = 1, .col_offset = 0 });
+    _ = win.printSegment(.{ .text = prefixByCells(win, status_safe, win.width), .style = style }, .{ .row_offset = 1, .col_offset = 0, .wrap = .none });
 }
 
 pub fn renderHelpBar(win: vaxis.Window) void {
@@ -382,10 +407,43 @@ pub fn renderHelpBar(win: vaxis.Window) void {
     for (keybinds) |kb| {
         if (col >= win.width -| 5) break;
         if (kb.key.len > 0) {
-            _ = win.printSegment(.{ .text = kb.key, .style = keybind_style }, .{ .row_offset = help_row, .col_offset = col });
-            col += @intCast(kb.key.len);
+            _ = win.printSegment(.{ .text = kb.key, .style = keybind_style }, .{ .row_offset = help_row, .col_offset = col, .wrap = .none });
+            col += win.gwidth(kb.key);
         }
-        _ = win.printSegment(.{ .text = kb.desc, .style = desc_style }, .{ .row_offset = help_row, .col_offset = col });
-        col += @intCast(kb.desc.len);
+
+        _ = win.printSegment(.{ .text = kb.desc, .style = desc_style }, .{ .row_offset = help_row, .col_offset = col, .wrap = .none });
+        col += win.gwidth(kb.desc);
     }
+}
+
+test "rendering truncates whole graphemes and highlights by terminal columns" {
+    const allocator = std.testing.allocator;
+    var env: std.process.Environ.Map = .init(allocator);
+    defer env.deinit();
+    var discard_buffer: [1024]u8 = undefined;
+    var sink = std.Io.Writer.Discarding.init(&discard_buffer);
+    var vx = try vaxis.init(std.testing.io, allocator, &env, .{});
+    defer vx.deinit(allocator, &sink.writer);
+    vx.caps.unicode = .unicode;
+    try vx.resize(allocator, &sink.writer, .{ .cols = 40, .rows = 5, .x_pixel = 0, .y_pixel = 0 });
+    const win = vx.window();
+    const sample = "\u{4e2d}e\u{301}\u{1f469}\u{200d}\u{1f680}tail";
+    try std.testing.expectEqualStrings("", prefixByCells(win, sample, 1));
+    try std.testing.expectEqualStrings("\u{4e2d}", prefixByCells(win, sample, 2));
+    try std.testing.expectEqualStrings("\u{4e2d}e\u{301}", prefixByCells(win, sample, 4));
+    try std.testing.expectEqualStrings("\u{4e2d}e\u{301}\u{1f469}\u{200d}\u{1f680}", prefixByCells(win, sample, 5));
+    try std.testing.expectEqualStrings("first", prefixByCells(win, "first\nsecond", 40));
+    fillScreen(win);
+    renderHighlightedText(win, "\u{4e2d}e\u{301}tail", "\u{301}", 2, 0, .{ .fg = colors.fg_primary }, false, colors.bg_primary);
+    try std.testing.expectEqualStrings("\u{4e2d}", vx.screen.readCell(0, 2).?.char.grapheme);
+    try std.testing.expectEqualStrings("e\u{301}", vx.screen.readCell(2, 2).?.char.grapheme);
+    try std.testing.expectEqual(colors.fg_highlight, vx.screen.readCell(2, 2).?.style.fg);
+    try std.testing.expectEqualStrings("t", vx.screen.readCell(3, 2).?.char.grapheme);
+    var path_buf: [64]u8 = undefined;
+    const truncated = truncateDirectory(win, "C:\\\u{4e2d}\u{1f469}\u{200d}\u{1f680}", 4, &path_buf);
+    try std.testing.expectEqualStrings("..\u{1f469}\u{200d}\u{1f680}", truncated);
+    try std.testing.expect(win.gwidth(truncated) <= 4);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(truncated));
+    renderHelpBar(win);
+    try std.testing.expectEqualStrings("N", vx.screen.readCell(5, 4).?.char.grapheme);
 }

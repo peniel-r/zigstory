@@ -94,6 +94,31 @@ pub fn build(b: *std.Build) void {
     const profile_step = b.step("profile-tools", "Build the read-only TUI paging/rendering profiler");
     profile_step.dependOn(&profile_install.step);
 
+    const startup_profile = b.addExecutable(.{
+        .name = "zigstory-startup-profile",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/startup_profile.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zigstory", .module = mod },
+                .{ .name = "sqlite", .module = sqlite_mod },
+            },
+        }),
+    });
+    profile_step.dependOn(&b.addInstallArtifact(startup_profile, .{}).step);
+
+    const search_benchmark = b.addExecutable(.{
+        .name = "zigstory-search-benchmark",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/search_benchmark.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "sqlite", .module = sqlite_mod }},
+        }),
+    });
+    profile_step.dependOn(&b.addInstallArtifact(search_benchmark, .{}).step);
+
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);

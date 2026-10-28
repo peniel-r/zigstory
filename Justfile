@@ -21,6 +21,15 @@ install:
 safe-upgrade:
     @pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\safe-upgrade.ps1
 
+# Fetch pinned dependencies and apply the existing Zig 0.16 SQLite compatibility patch
+prepare:
+    @pwsh -NoProfile -File scripts\prepare-dependencies.ps1
+
+# Run synthetic latency and bounded-memory budgets (requires Zig 0.16 and .NET 8+)
+performance: build-zig
+    @zig build profile-tools -Doptimize=ReleaseFast
+    @dotnet run --project tests\predictor\PredictorRegressionTests.csproj -c Release -- --performance-check "{{justfile_directory()}}\zig-out\bin\zigstory.exe" "{{justfile_directory()}}\zig-out\bin\zigstory-tui-profile.exe" "{{justfile_directory()}}\zig-out\bin\zigstory-search-benchmark.exe"
+
 # Build in debug mode
 debug-zig:
     @zig build -Doptimize=Debug

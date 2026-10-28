@@ -1,7 +1,8 @@
 # zigstory — Functional Tests
 
-This folder contains the PowerShell 7 functional, JSON, and recording regression
-suites for zigstory. The runner executes all three; Zig core/TUI tests run separately.
+This folder contains the PowerShell 7 functional, JSON, recording, safe-upgrade and
+logging regression suites. The runner executes all five; Zig core/TUI and predictor
+tests run separately.
 
 ## Prerequisites
 
@@ -16,6 +17,7 @@ suites for zigstory. The runner executes all three; Zig core/TUI tests run separ
 
 ```powershell
 # From the repository root — build + run all tests
+just prepare
 pwsh -NoProfile -File tests/run_tests.ps1
 
 # Skip rebuild (use existing zig-out\bin\zigstory.exe)
@@ -53,7 +55,11 @@ the recording helpers and mock process launch without installing hooks.
 Core regressions also cover legacy-schema migration, atomic rollback, future
 schema rejection, bounded startup page reads, FTS maintenance, and metadata-only
 updates. TUI regressions include Unicode grapheme deletion and Windows-path
-colons; JSON regressions exercise the explicit maintenance command. Recording
+colons, cell-aware truncation/highlighting, unchanged-event redraw suppression,
+deterministic latest-row deduplication, independent search caches, and cache
+invalidation after same-connection and external writes (including read-only main
+connections). Core tests also verify PSReadLine import chronology.
+JSON regressions exercise the explicit maintenance command. Recording
 tests run real asynchronous importers against isolated history, covering launch,
 import, database-startup and post-commit cleanup failures, retry/deduplication,
 shell exit before import completes, 64-bit duration, history-filter preservation,
@@ -86,8 +92,11 @@ WAL data, then migrates/profiles/deletes its temporary snapshot. It measures ful
 CLI process startup plus an empty-directory query, prediction requests on
 internally sampled prefixes, and actual TUI search/browsing pages. It reports
 median/p95 times and first/second-half result-arena peaks to expose memory growth.
+It separately reports help-only process overhead and 21-sample internal runtime,
+environment, database, query and shutdown timings using `zigstory-startup-profile`.
 The TUI profiler also runs real rendering on a headless 160x240 stress viewport
-with output discarded, and reports frame-arena capacity and render timings.
+with output discarded, alternates narrow/broad substring searches and browsing,
+and reports frame-arena capacity and render timings.
 Sampled process memory excludes terminal I/O and the input thread; interactive
 first-frame latency is not measured.
 
@@ -104,6 +113,38 @@ These check cache freshness after committed writes/rank changes, stable suggesti
 ownership, literal wildcard/path handling, concurrent callers, in-flight SQLite
 cancellation, and error diagnostics. All databases are temporary; no profile is
 loaded or installed.
+
+## Performance gates
+
+```powershell
+just performance
+```
+
+Requires Zig 0.16.0, .NET SDK 8+ and prepared dependencies (`just prepare`).
+The recipe builds ReleaseFast CLI/profile tools and runs temporary synthetic
+100,000-row fixtures. No installed files, profile or user history are modified.
+
+| Budget | Limit |
+| --- | --- |
+| Full CLI startup plus empty metrics p95 | < 1,000 ms |
+| New-connection / cached prediction p95 | < 50 / 10 ms |
+| Headless 160x240 frame p95 | < 50 ms |
+| Loaded TUI rows / result-arena capacity | <= 237 / < 1 MiB |
+| Second-half result-arena peak | <= first-half peak |
+| Sampled TUI process working set | < 128 MiB |
+| Broad substring initial / deep-page p95 | < 500 / 10 ms |
+| SQLite synthetic fixture/cache memory peak | < 64 MiB |
+
+`zigstory-search-benchmark` checks 25,000 distinct matches across 100,000 rows,
+including nonmonotonic timestamps, and measures 21 initial/deep/next-page samples.
+Result-string arenas are bounded independently of SQLite TEMP ID storage.
+Budgets use warm OS caches and generous regression thresholds, not universal
+latency promises. Process-memory sampling may miss transient peaks.
+
+`.github\workflows\performance.yml` prepares pinned dependencies, runs Debug and
+ReleaseFast Zig regressions, `zig build run`, PowerShell/predictor regressions,
+and these budgets on Windows. Local equivalents have been exercised; the newly
+added hosted workflow still needs its first GitHub run after publication.
 
 | ID | Area | What is tested |
 |----|------|----------------|

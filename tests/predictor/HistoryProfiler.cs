@@ -6,7 +6,7 @@ using zigstoryPredictor;
 
 internal static class HistoryProfiler
 {
-    public static void Run(string sourcePath, string executable, string tuiProfiler)
+    public static string Run(string sourcePath, string executable, string tuiProfiler)
     {
         var directory = Path.Combine(Path.GetTempPath(), $"zigstory_profile_{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
@@ -26,6 +26,19 @@ internal static class HistoryProfiler
             // Migrate only the disposable snapshot, never the source history.
             RunProcess(executable, cliArgs, home);
             var startup = Measure(21, () => RunProcess(executable, cliArgs, home));
+            var helpStartup = Measure(21, () => RunProcess(executable, ["help"], home));
+            var phaseProfiler = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(tuiProfiler))!, "zigstory-startup-profile.exe");
+            var phaseSamples = new List<Dictionary<string, double>>();
+            for (var i = 0; i < 21; i++)
+            {
+                var phases = RunProcess(phaseProfiler, [snapshot], home);
+                using var phaseJson = JsonDocument.Parse(phases.Output);
+                phaseSamples.Add(phaseJson.RootElement.EnumerateObject()
+                    .Where(p => p.Value.ValueKind == JsonValueKind.Number)
+                    .ToDictionary(p => p.Name, p => p.Value.GetDouble()));
+            }
+            var phaseSummaries = phaseSamples[0].Keys.ToDictionary(key => key,
+                key => Summary(phaseSamples.Select(sample => sample[key]).ToList()));
             long rows;
             var prefixes = new List<string>();
             using (var connection = Open(snapshot, SqliteOpenMode.ReadOnly))
@@ -67,17 +80,21 @@ internal static class HistoryProfiler
             }
             var tui = RunProcess(tuiProfiler, [snapshot], home, sampleWorkingSet: true);
             using var tuiJson = JsonDocument.Parse(tui.Output);
-            Console.WriteLine(JsonSerializer.Serialize(new
+            var report = JsonSerializer.Serialize(new
             {
                 history_rows = rows,
                 prefix_count = prefixes.Count,
                 cli_startup_and_empty_perf = Summary(startup),
+                cli_process_and_help = Summary(helpStartup),
+                startup_phases = phaseSummaries,
                 prediction_connection_cold = Summary(coldTimes),
                 prediction_cached = Summary(cachedTimes),
                 tui_data_path = tuiJson.RootElement,
                 tui_process_sampled_peak_working_set_bytes = tui.PeakWorkingSet,
                 note = "Local read-only backup; command text and prefixes are never printed. Warm OS cache; CLI timings include process startup and empty-directory metrics. TUI includes paging and headless rendering, not terminal I/O/input thread.",
-            }, new JsonSerializerOptions { WriteIndented = true }));
+            }, new JsonSerializerOptions { WriteIndented = true });
+            Console.WriteLine(report);
+            return report;
         }
         finally
         {

@@ -121,7 +121,10 @@ The easiest way to install `zigstory` is using the provided installation script.
 git clone https://github.com/yourusername/zigstory.git
 cd zigstory
 
-# 2. Build and install automatically
+# 2. Fetch dependencies and apply the checked-in Zig 0.16 compatibility patch
+just prepare
+
+# 3. Build and install automatically
 just install
 ```
 
@@ -140,6 +143,7 @@ If you prefer to install manually:
 1. **Build the Zig CLI**:
 
    ```powershell
+   just prepare
    zig build -Doptimize=ReleaseFast
    ```
 
@@ -427,6 +431,7 @@ directory; noninteractive commands without a subsequent prompt are not recorded.
 ### Local performance profiling
 
 ```powershell
+zig build -Doptimize=ReleaseFast
 zig build profile-tools -Doptimize=ReleaseFast
 dotnet run --project tests\predictor\PredictorRegressionTests.csproj -c Release -- --profile "$env:USERPROFILE\.zigstory\history.db" "$PWD\zig-out\bin\zigstory.exe" "$PWD\zig-out\bin\zigstory-tui-profile.exe"
 ```
@@ -436,8 +441,40 @@ copy. It prints counts and aggregate CLI/prediction timings, plus TUI paging are
 usage and sampled process working set, including headless rendering on a
 160-column/240-row stress viewport; no commands or prefixes are printed. CLI
 timings include process startup and empty-directory metrics with warm OS caches.
+The report separately measures a help-only process and internal runtime,
+environment, database, query and shutdown phases using the startup profiler.
 TUI measurements exercise real search/browsing and rendering code using a discard
 sink; terminal I/O, the input thread, and interactive first-frame latency are excluded.
+
+Run repeatable synthetic correctness/performance gates with:
+
+```powershell
+just performance
+```
+
+This builds the CLI and three profiling tools, then checks a private 100,000-row
+fixture. Windows CI runs the same budgets alongside regressions; see
+[`tests\README.md`](tests/README.md) for thresholds and limitations.
+
+Substring searches materialize deduplicated IDs in a SQLite TEMP table once per
+query or detected database change. Indexed page seeks avoid repeating grouping
+and deep OFFSET scans; command strings remain page-bounded, but TEMP storage grows
+with match count. In the local synthetic benchmark, deep-page median fell from
+42.68 ms to 0.039 ms, at a roughly 6% initial-query cost (55.67 to 59.14 ms).
+Headless rendering also uses bulk fills, skips unchanged frames, and truncates and
+highlights complete Unicode graphemes using terminal-cell widths.
+
+Startup profiling found roughly 3 ms inside the instrumented phases versus
+170-176 ms for full processes on the measured host. The remaining launch/load
+overhead has not been eliminated or attributed to a specific external cause.
+Immediate recording is unchanged; no batching or persistent writer is introduced.
+New PSReadLine imports now preserve oldest-to-newest chronology; existing imported
+timestamps are not rewritten. These optimizations add no persistent schema change.
+
+For this upgrade, rebuild and use `just safe-upgrade` from a quiet `pwsh -NoProfile`
+session for the executable and hook. Also publish and deploy the predictor DLLs
+using the manual installation steps to enable predictor logging; safe-upgrade
+does not replace predictor files. Restart PowerShell after deployment.
 
 #### `zigstory perf`
 

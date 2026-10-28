@@ -54,8 +54,9 @@ try {
     Check ([IO.File]::Exists("$cliPath.1") -and [IO.FileInfo]::new($cliPath).Length -lt 1MB) 'CLI rotates at one MiB'
     $env:ZIGSTORY_LOG_LEVEL = 'Off'
     $before = [IO.File]::ReadAllText($cliPath)
-    & $Exe add 2>&1 | Out-Null
+    $offOutput = (& $Exe add 2>&1 | Out-String)
     Check ([IO.File]::ReadAllText($cliPath) -eq $before) 'CLI honors Off'
+    Check ($offOutput.Contains('Error parsing arguments')) 'Off does not hide the original console error'
     $env:ZIGSTORY_LOG_LEVEL = 'Error'
     $env:ZIGSTORY_LOG_DIR = Join-Path $directory 'blocked'
     [IO.File]::WriteAllText($env:ZIGSTORY_LOG_DIR, 'not a directory')

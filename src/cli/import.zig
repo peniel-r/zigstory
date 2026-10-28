@@ -81,10 +81,11 @@ pub fn parseHistoryFile(allocator: std.mem.Allocator, io: std.Io, file: std.Io.F
     }
 
     // Allocate array for entries
+    var index: usize = 0;
     const entries = try allocator.alloc(HistoryEntry, count);
     errdefer {
         // Free any allocated commands on error
-        for (entries[0..count]) |entry| {
+        for (entries[0..index]) |entry| {
             allocator.free(entry.cmd);
         }
         allocator.free(entries);
@@ -92,18 +93,15 @@ pub fn parseHistoryFile(allocator: std.mem.Allocator, io: std.Io, file: std.Io.F
 
     // Second pass: parse entries
     start = 0;
-    var index: usize = 0;
-    var line_number: u32 = 0;
 
     // Use a base timestamp (current time minus estimated history age)
-    // We'll decrement by 60 seconds for each command to simulate realistic timestamps
+    // PSReadLine appends new commands. Preserve file order; actual times are unknown.
     const base_timestamp = std.Io.Timestamp.now(io, .real).toSeconds();
 
     for (buffer, 0..) |byte, i| {
         if (byte == newline or i == buffer.len - 1) {
             const end = if (byte == newline) i else i + 1;
             const line = buffer[start..end];
-            line_number += 1;
             start = end + 1;
 
             // Skip empty lines
@@ -114,9 +112,8 @@ pub fn parseHistoryFile(allocator: std.mem.Allocator, io: std.Io, file: std.Io.F
             // Trim whitespace
             const trimmed_cmd = try allocator.dupe(u8, std.mem.trim(u8, line, " \t\r"));
 
-            // Calculate timestamp (reverse order - older commands at end of file)
-            // PowerShell history appends new commands, so earlier lines are older
-            const timestamp = base_timestamp - (@as(i64, @intCast(line_number)) * 60);
+            const age = std.math.mul(i64, @intCast(count - index - 1), 60) catch return error.HistoryTooLarge;
+            const timestamp = base_timestamp -| age;
 
             entries[index] = HistoryEntry{
                 .cmd = trimmed_cmd,

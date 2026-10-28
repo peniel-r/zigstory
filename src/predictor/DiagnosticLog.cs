@@ -15,7 +15,8 @@ public static class DiagnosticLog
         var configured = Environment.GetEnvironmentVariable("ZIGSTORY_LOG_LEVEL");
         var threshold = DiagnosticLevel.Error;
         if (configured is not null &&
-            (!Enum.TryParse(configured, true, out threshold) || !Enum.IsDefined(threshold)))
+            (!Enum.GetNames<DiagnosticLevel>().Contains(configured, StringComparer.OrdinalIgnoreCase) ||
+             !Enum.TryParse(configured, true, out threshold)))
         {
             Trace.TraceError("Invalid ZIGSTORY_LOG_LEVEL; using Error.");
             threshold = DiagnosticLevel.Error;
@@ -65,7 +66,7 @@ public static class DiagnosticLog
                 finally { processLock.Unlock(0, 1); }
             }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             Trace.TraceError("Zigstory logging failed: {0}", ex.GetType().Name);
         }

@@ -19,12 +19,17 @@ pub fn main(init: std.process.Init) !void {
     });
     defer db.deinit();
     const query = blk: {
-        var stmt = try db.prepare("SELECT substr(cmd,1,8) FROM history GROUP BY cmd ORDER BY COUNT(*) DESC LIMIT 1");
+        var stmt = try db.prepare("SELECT substr(cmd,1,8) AS narrow,substr(cmd,1,3) AS broad FROM history GROUP BY cmd ORDER BY COUNT(*) DESC LIMIT 1");
         defer stmt.deinit();
-        var rows = try stmt.iterator([]const u8, .{});
-        break :blk (try rows.nextAlloc(allocator, .{})) orelse try allocator.dupe(u8, "");
+        const Samples = struct { narrow: []const u8, broad: []const u8 };
+        var rows = try stmt.iterator(Samples, .{});
+        break :blk (try rows.nextAlloc(allocator, .{})) orelse Samples{
+            .narrow = "",
+            .broad = "",
+        };
     };
-    defer allocator.free(query);
+    defer allocator.free(query.narrow);
+    defer allocator.free(query.broad);
     var state = search.SearchState.init(allocator);
     defer state.deinit(allocator);
     var discard_buffer: [4096]u8 = undefined;
@@ -44,7 +49,7 @@ pub fn main(init: std.process.Init) !void {
     var max_rows: usize = 0;
     for (0..times.len) |i| {
         state.query.clearRetainingCapacity();
-        if (i % 2 == 1) try state.query.appendSlice(allocator, query);
+        if (i % 2 == 1) try state.query.appendSlice(allocator, if (i % 4 == 1) query.narrow else query.broad);
         const start = std.Io.Timestamp.now(init.io, .awake);
         try state.loadPage(&db, 237, 0, true);
         if (i % 4 >= 2 and state.total_count > 237) {

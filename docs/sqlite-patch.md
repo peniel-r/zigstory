@@ -1,158 +1,62 @@
-SQLite vendored patch for Zig 0.16 — Documentation
+# SQLite compatibility patch for Zig 0.16
 
-Overview
---------
-This document records the vendored changes applied to the sqlite package shipped in zig-pkg/
-for the zigstory project. The changes are narrowly targeted to work around two interrelated
-issues observed when building/running on Zig 0.16.0 for Windows x64:
+The pinned zig-sqlite 3.48.0 dependency needs local compatibility changes for
+Zig 0.16.0. Dependencies under `zig-pkg` are ignored, so fetching upstream alone
+does not reproduce a working build. The complete patch is checked in as
+`scripts\patches\sqlite-zig016.patch`.
 
-1. Comptime string materialization bug: ParsedQuery(...).getQuery() (used by the typed
-   statement machinery) could materialize to an empty slice at runtime under Zig 0.16, causing
-   prepared statements to be created with empty SQL text and leading to runtime SQLite errors
-   such as error.EmptyQuery.
+## Preparing a checkout
 
-2. Preparation path fragility: Relying on the internal typed StatementType.prepare() path
-   that depends on comptime-transformed query data made the library fragile on this compiler
-   version. To avoid runtime failures we route the SQL text directly to DynamicStatement.prepare()
-   which accepts a runtime string.
+From the repository root, with Zig 0.16.0, Git and PowerShell 7 available:
 
-This patch is intentionally minimal and localized to sqlite.zig in the vendored copy under
-zig-pkg/. It does not modify system-wide SQLite installs or anything outside this repository.
+```powershell
+just prepare
+# Equivalent, including an explicit compiler override:
+pwsh -NoProfile -File scripts\prepare-dependencies.ps1 -Zig 'C:\tools\zig\zig.exe'
+zig build test
+zig build run -Doptimize=ReleaseFast
+```
 
-Files modified
---------------
-- zig-pkg/sqlite-3.48.0-*/sqlite.zig
-  (path in this repo: zig-pkg/sqlite-3.48.0-F2R_.../sqlite.zig)
+The script fetches pinned packages using a repository-local download cache and
+applies the patch only when all hunks match the pristine package. An already
+patched package is accepted using a reverse check. Divergent sources are rejected
+without overwriting local edits. It requires exactly Zig 0.16.0; newer compiler
+versions need separate compatibility validation.
 
-What changed (high level)
--------------------------
-We changed the implementation of Db.prepareWithDiags(...) and Db.prepare(...) so that the
-original comptime `query` string literal is forwarded directly to DynamicStatement.prepare() at
-runtime instead of routing through StatementType(...).prepare(...) that depended on
-ParsedQuery(...).getQuery(). The former path was producing empty SQL text at runtime.
+Windows CI uses this same preparation step. A pristine fetch plus patch has
+also been verified locally with the ReleaseFast core/TUI regressions.
 
-- prepareWithDiags: previously returned StatementType(.{}, query).prepare(self, options, 0);
-  Now it prepares a DynamicStatement from the original query string and returns it wrapped
-  so existing call sites continue to receive a StatementType-like value.
+## Scope and rationale
 
-- prepare: same approach as prepareWithDiags but with default options.
+The patch modifies four upstream files:
 
-Representative code snippets
-----------------------------
-NOTE: The following snippets are representative and reflect the committed change. They are
-intended to make the modification intent explicit for reviewers.
+| File | Purpose |
+| --- | --- |
+| `build.zig` | Update build APIs and generated include handling |
+| `build\Preprocessor.zig` | Adapt preprocessing and I/O to Zig 0.16 |
+| `query.zig` | Update compile-time query parsing compatibility |
+| `sqlite.zig` | Adapt allocator/type APIs and statement preparation |
 
-Old (simplified):
+Typed preparation forwards the original SQL literal to the dynamic preparation
+path while preserving the typed statement wrapper. This avoids observed empty
+runtime SQL from the compile-time transformed-query path on the affected
+compiler/backend. The C preparation call uses a sentinel-terminated SQL string:
+**dynamically constructed SQL must also be NUL-terminated**, for example with
+`std.fmt.allocPrintSentinel(..., 0)`.
 
-    pub fn prepareWithDiags(self: *Self, comptime query: []const u8, options: QueryOptions) DynamicStatement.PrepareError!blk: {
-        @setEvalBranchQuota(100000);
-        break :blk StatementType(.{}, query);
-    } {
-        @setEvalBranchQuota(100000);
-        return StatementType(.{}, query).prepare(self, options, 0);
-    }
+These are repository-local dependency changes, not modifications to system-wide
+SQLite. They include compatibility work originally developed on
+`zig016-migration`; the checked-in patch makes that previously ignored state
+reproducible. It is not a claim that upstream supports Zig 0.16 unchanged.
 
-New (simplified):
+## Maintenance
 
-    pub fn prepareWithDiags(self: *Self, comptime query: []const u8, options: QueryOptions) DynamicStatement.PrepareError!blk: {
-        @setEvalBranchQuota(100000);
-        break :blk StatementType(.{}, query);
-    } {
-        @setEvalBranchQuota(100000);
-        // Pass the original comptime literal directly to the dynamic prepare path so the
-        // SQL text is read from the binary data section rather than from an intermediate
-        // buffer that Zig 0.16 may fail to materialize.
-        const dynamic = try DynamicStatement.prepare(self, query, options, 0);
-        return StatementType(.{}, query){ .dynamic_stmt = dynamic };
-    }
+Keep the package hash in `build.zig.zon`, the preparation script and the patch
+aligned. For a dependency/compiler upgrade, preserve any local edits, compare a
+fresh pinned source against the compatibility changes, regenerate the patch, and
+run both core/TUI and functional/predictor regressions. Do not silently drop the
+statement-preparation workaround without runtime tests.
 
-And likewise for `pub fn prepare(self: *Self, comptime query: []const u8)` — it now obtains a
-`dynamic` statement using DynamicStatement.prepare(self, query, .{}, 0) and returns a
-StatementType that references the dynamic statement.
-
-Why this fix
-------------
-- Practical: it avoids the runtime failure caused by Zig 0.16's comptime materialization issue
-  and lets the application operate normally without requiring immediate upstream changes to
-  zig-sqlite or the compiler.
-- Minimal scope: only the vendored sqlite.zig was changed; we did not rewrite the public API
-  or the higher-level application code.
-
-Upstream considerations
------------------------
-- This is a compatibility workaround for a Zig compiler/backend problem. It would be best to
-  propose the change upstream as a carefully-worded patch, explaining the Zig 0.16
-  codegen/materialization problem and the reason for forwarding the literal to the dynamic
-  prepare path.
-- Upstream reviewers may prefer a different approach (a noinline wrapper around the C call,
-  changes to how ParsedQuery materializes the query, or a conditional compilation guard for
-  affected Zig versions). The patch below is intentionally a small, easily-reviewed change.
-
-Patch format suggestion (for PR body)
-------------------------------------
-Title: sqlite: avoid comptime query materialization bug on Zig 0.16 (compat workaround)
-
-Body:
-- Problem: under Zig 0.16 the ParsedQuery -> getQuery() path can yield an empty runtime
-  slice for the SQL text, causing prepared statements to be created with empty SQL.
-- Change: forward the original comptime query literal directly to DynamicStatement.prepare()
-  in Db.prepareWithDiags and Db.prepare, ensuring the SQL bytes are read from the binary
-  data section and not from a transient buffer.
-- Tests: Verified locally on Windows x64, Zig 0.16.0: full functional test suite passes.
-- Rationale: minimal compatibility patch; suggests review for a more general fix upstream.
-
-Testing performed
------------------
-- Local environment (Windows):
-  - Zig 0.16.0
-  - PowerShell 7.7.0-preview.1 (used by functional tests)
-  - dotnet-sdk installed via Scoop (10.0.300)
-
-Commands run (representative):
-  - just build
-  - zig build
-  - pwsh -NoProfile -File tests/run_tests.ps1
-
-Result: Functional test suite passed (74/74). The `add`, `list`, `stats`, `perf`, and
-recalc-rank flows were exercised and verified.
-
-Risks & limitations
--------------------
-- This change routes typed statement preparation through the dynamic path. The typed
-  StatementType wrapper is still returned in order to preserve call-site compatibility, but
-  callers that relied on the specific compile-time-checked binding behavior could see
-  differences: the runtime binding remains correct, but some compile-time protections may be
-  relaxed depending on the exact StatementType implementation.
-- The fix is a workaround targeted at Zig 0.16; upstream changes to zig-sqlite or Zig may
-  obviate the need for this change in future compiler versions.
-
-Reverting the change
---------------------
-- To revert the change locally, checkout the commit that modified the vendored sqlite.zig and
-  reset it, or use git restore:
-
-    git checkout zig016-migration
-    git restore --staged zig-pkg/sqlite-3.48.0-*/sqlite.zig
-    git checkout -- zig-pkg/sqlite-3.48.0-*/sqlite.zig
-
-- Or revert the commit that introduced the patch and re-run tests.
-
-Notes about licensing
----------------------
-- The sqlite sources included under zig-pkg/ are a vendored copy. Keep license notices
-  intact when proposing patches upstream and when publishing this repository.
-
-Contact / history
------------------
-- Patch applied in branch: zig016-migration (commit d19bcbc)
-- If you want me to generate a formal git-format-patch or PR-ready patch file for upstream,
-  I can produce it (diff + commit message) and include suggested testing steps for reviewers.
-
-Appendix: Suggested git commands to produce a patch file
--------------------------------------------------------
-
-    git format-patch -1 d19bcbc -- zig-pkg/sqlite-3.48.0-*/sqlite.zig -o /tmp
-
-This creates a patch file under /tmp which can be attached to an upstream issue/PR.
-
-End of document.
+The patch is specific to the pinned source/compiler combination. Upstream or
+compiler fixes may eventually remove its necessity. Keep original dependency
+license notices intact.

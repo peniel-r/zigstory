@@ -8,6 +8,26 @@ const recalc = @import("cli/recalc.zig");
 const allocator = std.testing.allocator;
 const io = std.testing.io;
 
+test "PSReadLine imports assign increasing timestamps in file order" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "history.txt", .data = "oldest\r\n\r\n middle \r\nnewest" });
+    const file = try tmp.dir.openFile(io, "history.txt", .{});
+    defer file.close(io);
+    const parsed = try import_history.parseHistoryFile(allocator, io, file);
+    defer {
+        for (parsed.entries) |entry| allocator.free(entry.cmd);
+        allocator.free(parsed.entries);
+    }
+    try std.testing.expectEqual(@as(usize, 3), parsed.count);
+    try std.testing.expectEqualStrings("oldest", parsed.entries[0].cmd);
+    try std.testing.expectEqualStrings("middle", parsed.entries[1].cmd);
+    try std.testing.expectEqualStrings("newest", parsed.entries[2].cmd);
+    try std.testing.expectEqual(@as(i64, 60), parsed.entries[1].timestamp - parsed.entries[0].timestamp);
+    try std.testing.expectEqual(@as(i64, 60), parsed.entries[2].timestamp - parsed.entries[1].timestamp);
+    try std.testing.expect(@abs(parsed.entries[2].timestamp - std.Io.Timestamp.now(io, .real).toSeconds()) < 2);
+}
+
 fn scalar(db: *sqlite.Db, comptime sql: []const u8) !i64 {
     var stmt = try db.prepare(sql);
     defer stmt.deinit();

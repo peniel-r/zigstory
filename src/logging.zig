@@ -98,8 +98,10 @@ pub fn logFn(comptime level: std.log.Level, comptime scope: @EnumLiteral(), comp
         std.log.defaultLog(level, scope, format, args);
         return;
     };
-    if (@intFromEnum(mapped) > @intFromEnum(logger.level) or logger.level == .Off) return;
-    std.log.defaultLog(level, scope, format, args);
+    const enabled = logger.level != .Off and @intFromEnum(mapped) <= @intFromEnum(logger.level);
+    // Disabling file logging must not hide an operation's console diagnostic.
+    if (level == .err or level == .warn or enabled) std.log.defaultLog(level, scope, format, args);
+    if (!enabled) return;
     // Persist only the static event template and error identifiers, never string arguments.
     var code: ?[]const u8 = null;
     inline for (args) |argument| {
