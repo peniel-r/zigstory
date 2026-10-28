@@ -215,6 +215,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS history_fts
 -- Auto-sync triggers: history_ai, history_ad, history_au
 ```
 
+`PRAGMA user_version` tracks transactional schema migrations (currently version
+1). Normal startup does not scan history or retry ALTERs. The update trigger
+tracks command/ID changes, not rank/hash-only updates. Use `zigstory maintenance`
+to explicitly rebuild and validate FTS, followed by `PRAGMA optimize`.
+
 ### Database Location
 
 ```
@@ -261,7 +266,7 @@ zigstory search
 | `Ctrl+U` | Clear search query |
 | `Backspace` | Delete last search character |
 | `Esc` | Cancel command mode |
-| `:q` `Enter` | Quit |
+| `:q` `Enter` | Quit (start from an empty search query) |
 
 ### `import` — Bootstrap from history file
 
@@ -310,6 +315,13 @@ zigstory perf --cwd <path> --format json --threshold 5000
 ```powershell
 zigstory recalc-rank
 # Populates command_stats, backfills cmd_hash, recalculates all rank values
+```
+
+### `maintenance` — Explicit search-index maintenance
+
+```powershell
+zigstory maintenance
+# Rebuild and validate FTS, then run PRAGMA optimize; preserve history and ranks
 ```
 
 ### `help` / `-h` / `--help`

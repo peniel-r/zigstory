@@ -8,6 +8,7 @@ pub const Action = union(enum) {
     list: ListParams,
     fzf: void,
     recalc_rank: void,
+    maintenance: void,
     perf: PerfParams,
     help: void,
 };
@@ -58,6 +59,8 @@ pub fn parse(allocator: std.mem.Allocator, process_args: std.process.Args) !Acti
         return .fzf;
     } else if (std.mem.eql(u8, command, "recalc-rank")) {
         return .recalc_rank;
+    } else if (std.mem.eql(u8, command, "maintenance")) {
+        return .maintenance;
     } else if (std.mem.eql(u8, command, "perf")) {
         return parsePerf(allocator, &iter);
     } else if (std.mem.eql(u8, command, "-h") or std.mem.eql(u8, command, "--help")) {

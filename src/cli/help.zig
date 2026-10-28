@@ -22,6 +22,7 @@ pub fn printHelp() void {
         \\    stats       Display history statistics
         \\    perf        Display performance metrics for directory
         \\    recalc-rank Recalculate frecency ranks for all commands
+        \\    maintenance Rebuild/validate the FTS index and optimize the database
         \\    help        Display this help message
         \\
         \\===============================================================================
@@ -58,8 +59,10 @@ pub fn printHelp() void {
         \\      Ctrl+K/J      Page up/down (vim-style)
         \\      Ctrl+F        Toggle global/current-directory filtering
         \\      Ctrl+U        Clear query while preserving directory filtering
+        \\      :q            Quit command (from an empty search query)
         \\      Enter         Select command and exit
-        \\      Ctrl+C/Esc    Exit without selection
+        \\      Ctrl+C        Exit without selection
+        \\      Esc           Clear query, or exit when the query is empty
         \\      Type          Filter results in real-time
         \\
         \\    EXAMPLE:
@@ -101,6 +104,13 @@ pub fn printHelp() void {
         \\    EXAMPLE:
         \\      zigstory import                           # Import from default location
         \\      zigstory import --file "C:\history.json"  # Import a JSON batch
+        \\
+        \\-------------------------------------------------------------------------------
+        \\
+        \\  zigstory maintenance
+        \\    Rebuild and validate the FTS index, then run PRAGMA optimize.
+        \\    Normal startup runs only required schema migrations, not history scans.
+        \\    History, statistics, and ranks are preserved.
         \\
         \\-------------------------------------------------------------------------------
         \\
@@ -314,8 +324,10 @@ fn printSearchHelp() void {
         \\    Ctrl+K/J                 Page up/down (vim-style)
         \\    Ctrl+F                   Toggle global/current-directory filtering
         \\    Ctrl+U                   Clear query while preserving directory filtering
+        \\    :q                       Quit command (from an empty search query)
         \\    Enter                    Select command and exit
-        \\    Ctrl+C/Esc               Exit without selection
+        \\    Ctrl+C                   Exit without selection
+        \\    Esc                      Clear query, or exit when the query is empty
         \\    Type                     Filter results in real-time
         \\
         \\FEATURES:

@@ -49,6 +49,24 @@ filtering, queued edits, page navigation, large viewports, and bounded result
 memory. JSON regressions exercise the actual PowerShell recording serializer and
 CLI output, including long, quoted, multiline, and Unicode commands. They extract
 only the recording function and mock process launch without installing hooks.
+Core regressions also cover legacy-schema migration, atomic rollback, future
+schema rejection, bounded startup page reads, FTS maintenance, and metadata-only
+updates. TUI regressions include Unicode grapheme deletion and Windows-path
+colons; JSON regressions exercise the explicit maintenance command.
+
+Predictor regressions use an isolated .NET console harness without additional
+test-framework packages:
+
+```powershell
+dotnet run --project tests\predictor\PredictorRegressionTests.csproj -c Release
+# Optional 100,000-row warm query benchmark (median of 21 runs)
+dotnet run --project tests\predictor\PredictorRegressionTests.csproj -c Release -- --benchmark
+```
+
+These check cache freshness after committed writes/rank changes, stable suggestion
+ownership, literal wildcard/path handling, concurrent callers, in-flight SQLite
+cancellation, and error diagnostics. All databases are temporary; no profile is
+loaded or installed.
 
 | ID | Area | What is tested |
 |----|------|----------------|

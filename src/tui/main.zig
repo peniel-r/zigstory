@@ -192,7 +192,7 @@ const TuiApp = struct {
         switch (event) {
             .key_press => |key| {
                 // Handle command mode (vim-like ':q')
-                if (key.matches(':', .{})) {
+                if (!self.command_mode and self.search_state.query.items.len == 0 and key.matches(':', .{})) {
                     self.command_mode = true;
                     self.command_buffer.clearRetainingCapacity();
                     return;
@@ -220,7 +220,7 @@ const TuiApp = struct {
                     // Backspace: Remove last character
                     if (key.matches(vaxis.Key.backspace, .{})) {
                         if (self.command_buffer.items.len > 0) {
-                            _ = self.command_buffer.pop();
+                            deleteLastGrapheme(&self.command_buffer);
                         }
                         return;
                     }
@@ -252,7 +252,7 @@ const TuiApp = struct {
                 // Handle backspace for search first (before navigation)
                 if (key.matches(vaxis.Key.backspace, .{})) {
                     if (self.search_state.query.items.len > 0) {
-                        _ = self.search_state.query.pop();
+                        deleteLastGrapheme(&self.search_state.query);
                         self.search_dirty = true;
                     }
                     return;
@@ -542,6 +542,13 @@ test "TUI renders the initial frame without input or resize events" {
     }
 }
 
+fn deleteLastGrapheme(buffer: *std.ArrayListUnmanaged(u8)) void {
+    var iter = vaxis.unicode.graphemeIterator(buffer.items);
+    var last_start: usize = 0;
+    while (iter.next()) |grapheme| last_start = grapheme.start;
+    buffer.shrinkRetainingCapacity(last_start);
+}
+
 fn createNavigationTestDb(count: usize) !sqlite.Db {
     var db = try sqlite.Db.init(.{
         .mode = .Memory,
@@ -628,6 +635,53 @@ test "search deduplicates commands using the newest matching directory entry" {
     try state.loadPage(&db, 100, 0, true);
     try std.testing.expectEqual(@as(usize, 0), state.total_count);
     try std.testing.expectEqual(@as(usize, 0), state.results.len);
+}
+
+test "backspace deletes complete Unicode graphemes without corrupting UTF-8" {
+    for ([_][]const u8{
+        "A",
+        "A\u{e9}",
+        "A\u{4e2d}",
+        "Ae\u{301}",
+        "A\u{1f44d}\u{1f3fd}",
+        "A\u{1f469}\u{200d}\u{1f680}",
+        "A\u{1f1fa}\u{1f1f8}",
+    }) |text| {
+        var buffer: std.ArrayListUnmanaged(u8) = .empty;
+        defer buffer.deinit(std.testing.allocator);
+        try buffer.appendSlice(std.testing.allocator, text);
+        deleteLastGrapheme(&buffer);
+        try std.testing.expectEqualStrings(if (text.len == 1) "" else "A", buffer.items);
+        try std.testing.expect(std.unicode.utf8ValidateSlice(buffer.items));
+        deleteLastGrapheme(&buffer);
+        deleteLastGrapheme(&buffer);
+        try std.testing.expectEqual(@as(usize, 0), buffer.items.len);
+    }
+}
+
+test "Windows path colons remain searchable and empty-query command mode still quits" {
+    const allocator = std.testing.allocator;
+    var environ_map: std.process.Environ.Map = .init(allocator);
+    defer environ_map.deinit();
+    var db = try createNavigationTestDb(1);
+    defer db.deinit();
+    try db.exec("INSERT INTO history VALUES(2,'C:\\tools\\run','local',0,0,2)", .{}, .{});
+    var app: TuiApp = undefined;
+    try app.init(allocator, &db, null, std.testing.io, &environ_map);
+    defer app.deinit();
+    try app.handleEvent(.{ .key_press = .{ .codepoint = 'C', .text = "C" } });
+    try app.handleEvent(.{ .key_press = .{ .codepoint = ':', .text = ":" } });
+    try app.handleEvent(.{ .key_press = .{ .codepoint = '\\', .text = "\\tools" } });
+    try app.flushSearch();
+    try std.testing.expect(!app.command_mode);
+    try std.testing.expectEqualStrings("C:\\tools", app.search_state.query.items);
+    try std.testing.expectEqual(@as(usize, 1), app.scroll_state.total_count);
+    try app.handleEvent(.{ .key_press = .{ .codepoint = 'u', .mods = .{ .ctrl = true } } });
+    try app.handleEvent(.{ .key_press = .{ .codepoint = ':', .text = ":" } });
+    try std.testing.expect(app.command_mode);
+    try app.handleEvent(.{ .key_press = .{ .codepoint = 'q', .text = "q" } });
+    try app.handleEvent(.{ .key_press = .{ .codepoint = vaxis.Key.enter } });
+    try std.testing.expect(app.should_quit);
 }
 
 test "large viewports and page navigation load complete pages" {

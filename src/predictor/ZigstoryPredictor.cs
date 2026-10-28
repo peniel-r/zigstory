@@ -12,38 +12,47 @@ namespace zigstoryPredictor;
 
 /// <summary>
 /// PowerShell command predictor that provides ghost text suggestions based on command history.
-/// Optimized for sub-5ms query performance with LRU caching and pre-compiled queries.
+/// Uses committed-write cache invalidation and cancellable prefix queries.
 /// </summary>
-public class ZigstoryPredictor : ICommandPredictor
+public class ZigstoryPredictor : ICommandPredictor, IDisposable
 {
     private readonly Guid _guid = new Guid("a8c5e3f1-2b4d-4e9a-8f1c-3d5e7b9a1c2f");
     private readonly DatabaseManager _dbManager;
+    private readonly SemaphoreSlim _requestGate = new(1, 1);
+    private SqliteConnection? _cacheConnection;
+    private long? _cacheDataVersion;
+    private bool _disposed;
     
     // LRU cache: max 100 entries for prediction results
     private readonly LruCache<string, List<string>> _resultCache = new(100);
     
-    // Pre-compiled query string (const for zero allocation)
-    // Use rank-based sorting for frecency ranking
     private const string PredictionQuery = @"
         SELECT DISTINCT cmd 
         FROM history 
-        WHERE cmd LIKE @input || '%' 
+        WHERE cmd LIKE @pattern ESCAPE '\'
         ORDER BY rank DESC, timestamp DESC 
         LIMIT 5";
-    
-    // Reusable list to minimize allocations (thread-local would be better for true thread safety)
-    [ThreadStatic]
-    private static List<PredictiveSuggestion>? _suggestionBuffer;
+    private const int CandidateLimit = 128;
+    private const string CandidateCountQuery = @"
+        SELECT COUNT(*) FROM (
+            SELECT 1 FROM history WHERE cmd LIKE @pattern ESCAPE '\' LIMIT @limit)";
+    private const string RankedPredictionQuery = @"
+        SELECT DISTINCT cmd FROM history
+        WHERE cmd LIKE (@pattern || '') ESCAPE '\'
+        ORDER BY rank DESC, timestamp DESC LIMIT 5";
     
     public Guid Id => _guid;
     public string Name => "Zigstory";
-    public string Description => "Zig-based shell history predictor with frecency ranking and sub-5ms query performance";
+    public string Description => "Zig-based shell history predictor with frecency ranking";
 
-    public ZigstoryPredictor()
+    public ZigstoryPredictor() : this(Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".zigstory", "history.db"))
     {
-        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var dbPath = Path.Combine(userProfile, ".zigstory", "history.db");
-        _dbManager = new DatabaseManager(dbPath);
+    }
+
+    public ZigstoryPredictor(string dbPath)
+    {
+        _dbManager = new DatabaseManager(dbPath, maxPoolSize: 1);
     }
 
     public SuggestionPackage GetSuggestion(
@@ -53,6 +62,7 @@ public class ZigstoryPredictor : ICommandPredictor
     {
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var input = context.InputAst.Extent.Text;
 
             // Optimization: Don't query on very short input
@@ -61,87 +71,123 @@ public class ZigstoryPredictor : ICommandPredictor
                 return default;
             }
 
-            // Check cache first (target: <1ms for cache hit)
-            if (_resultCache.TryGet(input, out var cachedResults) && cachedResults != null)
+            _requestGate.Wait(cancellationToken);
+            try
             {
-                return BuildSuggestionPackage(cachedResults);
-            }
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                var connection = _dbManager.GetConnection();
+                try
+                {
+                    using var registration = cancellationToken.Register(
+                        () => SQLitePCL.raw.sqlite3_interrupt(connection.Handle));
+                    cancellationToken.ThrowIfCancellationRequested();
+                    using var versionCommand = connection.CreateCommand();
+                    versionCommand.CommandText = "PRAGMA data_version";
+                    var version = (long)versionCommand.ExecuteScalar()!;
+                    if (!ReferenceEquals(connection, _cacheConnection) || version != _cacheDataVersion)
+                    {
+                        _resultCache.Clear();
+                        _cacheConnection = connection;
+                        _cacheDataVersion = version;
+                    }
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (_resultCache.TryGet(input, out var cachedResults) && cachedResults != null)
+                    {
+                        return BuildSuggestionPackage(cachedResults);
+                    }
 
-            // Cache miss: query database (target: <5ms)
-            var suggestions = GetSuggestionsFromDatabase(input, cancellationToken);
-            
-            if (suggestions.Count == 0)
+                    var suggestions = GetSuggestionsFromDatabase(connection, input, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    _resultCache.Set(input, suggestions);
+                    return BuildSuggestionPackage(suggestions);
+                }
+                finally
+                {
+                    _dbManager.ReturnConnection(connection);
+                }
+            }
+            finally
             {
-                return default;
+                _requestGate.Release();
             }
-
-            // Store in cache for future hits
-            _resultCache.Set(input, suggestions);
-
-            return BuildSuggestionPackage(suggestions);
         }
-        catch
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            return default;
+        }
+        catch (SqliteException ex) when (cancellationToken.IsCancellationRequested && ex.SqliteErrorCode == SQLitePCL.raw.SQLITE_INTERRUPT)
+        {
+            return default;
+        }
+        catch (SqliteException ex)
+        {
+            Trace.TraceWarning("Zigstory prediction query failed: {0}", ex.Message);
             return default;
         }
     }
 
     /// <summary>
     /// Builds a SuggestionPackage from a list of command strings.
-    /// Uses thread-static buffer to minimize allocations in hot path.
+    /// Returned packages own their lists, including across subsequent requests.
     /// </summary>
     private static SuggestionPackage BuildSuggestionPackage(List<string> suggestions)
     {
-        _suggestionBuffer ??= new List<PredictiveSuggestion>(5);
-        _suggestionBuffer.Clear();
+        if (suggestions.Count == 0) return default;
+        var entries = new List<PredictiveSuggestion>(suggestions.Count);
 
         foreach (var suggestion in suggestions)
         {
-            _suggestionBuffer.Add(new PredictiveSuggestion(suggestion));
+            entries.Add(new PredictiveSuggestion(suggestion));
         }
 
-        return new SuggestionPackage(_suggestionBuffer);
+        return new SuggestionPackage(entries);
     }
 
     /// <summary>
-    /// Queries the database for matching commands using pre-compiled query.
-    /// Optimized for <5ms p95 latency.
+    /// Queries the database for literal prefix matches.
     /// </summary>
-    private List<string> GetSuggestionsFromDatabase(string input, CancellationToken cancellationToken)
+    private static List<string> GetSuggestionsFromDatabase(
+        SqliteConnection connection, string input, CancellationToken cancellationToken)
     {
-        // Pre-allocate with expected capacity to avoid resizing
         var results = new List<string>(5);
-        SqliteConnection? connection = null;
-
-        try
+        var pattern = input.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%";
+        using var probe = new SqliteCommand(CandidateCountQuery, connection);
+        probe.Parameters.AddWithValue("@pattern", pattern);
+        probe.Parameters.AddWithValue("@limit", CandidateLimit);
+        var candidates = (long)probe.ExecuteScalar()!;
+        cancellationToken.ThrowIfCancellationRequested();
+        if (candidates == 0) return results;
+        // Broad prefixes favor the rank index; selective prefixes favor the text index.
+        using var command = new SqliteCommand(
+            candidates < CandidateLimit ? PredictionQuery : RankedPredictionQuery, connection);
+        command.Parameters.AddWithValue("@pattern", pattern);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
         {
-            connection = _dbManager.GetConnection();
-
-            using var command = new SqliteCommand(PredictionQuery, connection);
-            command.Parameters.AddWithValue("@input", input);
-
-            using var reader = command.ExecuteReader();
-            while (reader.Read() && !cancellationToken.IsCancellationRequested)
+            cancellationToken.ThrowIfCancellationRequested();
+            var cmd = reader.GetString(0);
+            if (!string.IsNullOrWhiteSpace(cmd))
             {
-                var cmd = reader.GetString(0);
-                if (!string.IsNullOrWhiteSpace(cmd))
-                {
-                    results.Add(cmd);
-                }
+                results.Add(cmd);
             }
         }
-        catch
+        return results;
+    }
+
+    public void Dispose()
+    {
+        _requestGate.Wait();
+        try
         {
-            // Swallow exceptions to prevent PowerShell disruption
+            if (_disposed) return;
+            _disposed = true;
+            _resultCache.Clear();
+            _cacheConnection = null;
+            _dbManager.Dispose();
         }
         finally
         {
-            if (connection != null)
-            {
-                _dbManager.ReturnConnection(connection);
-            }
+            _requestGate.Release();
         }
-
-        return results;
     }
 }

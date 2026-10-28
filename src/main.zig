@@ -336,6 +336,20 @@ pub fn main(init: std.process.Init) !void {
                 std.process.exit(1);
             };
         },
+        .maintenance => {
+            const home_dir = getHomeDir(init.environ_map) orelse return error.HomeDirectoryNotFound;
+            const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
+            const db_dir = std.fs.path.dirname(db_path) orelse ".";
+            try std.Io.Dir.cwd().createDirPath(init.io, db_dir);
+            const db_path_z = try allocator.dupeZ(u8, db_path);
+            var db = try zigstory.db.initDb(db_path_z);
+            defer db.deinit();
+            zigstory.db.maintain(&db) catch |err| {
+                std.debug.print("Error maintaining search index: {}\n", .{err});
+                return err;
+            };
+            std.debug.print("Search index rebuilt and validated; database optimization complete.\n", .{});
+        },
         .help => {
             help.printHelp();
         },

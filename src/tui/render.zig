@@ -371,7 +371,7 @@ pub fn renderHelpBar(win: vaxis.Window) void {
         .{ .key = "↑/↓", .desc = " Nav  " },
         .{ .key = "Enter", .desc = " Select&Copy  " },
         .{ .key = "S+Space", .desc = " Toggle Sel " },
-        .{ .key = ":q", .desc = " Exit  " },
+        .{ .key = "Ctrl+C", .desc = " Exit  " },
         .{ .key = "PgUp/Dn", .desc = " Page  " },
         .{ .key = "Home/End", .desc = " Jump  " },
         .{ .key = "Ctrl+U", .desc = " Clear  " },

@@ -20,7 +20,9 @@
 ### 🧠 **AI-Powered Predictions**
 
 - **Ghost text suggestions** as you type (powered by custom C# `ICommandPredictor`)
-- **LRU caching** for instant cache hits (<1ms)
+- **LRU caching** invalidated after committed history or rank changes
+- **Cancellable SQLite queries** avoid finishing obsolete predictions
+- **Adaptive prefix queries** favor text indexes for selective prefixes and ranking for broad prefixes
 - **Advanced frecency ranking** based on frequency and recency scoring
 - **Connection pooling** for optimal database performance
 
@@ -240,6 +242,8 @@ Launch the interactive TUI search interface.
 - Paged results with full match counts and no fixed result limit
 - Reusable result memory and coalesced queued edits
 - Directory filtering that applies to browsing and survives clearing the query
+- Unicode-aware backspace removes complete graphemes, including combined emoji
+- Colons within search queries remain literal, so Windows paths are searchable
 - Multi-select support (up to 5 commands)
 - Keyboard navigation (↑/↓, Page Up/Down, Ctrl+K/J)
 - Selected command copied to clipboard
@@ -248,6 +252,7 @@ Launch the interactive TUI search interface.
 **Keybindings:**
 
 - Type to filter results in real-time (case-insensitive)
+- `:q` enters quit-command mode only when the search query is empty
 
 ### ⌨️ Keyboard Shortcuts
 
@@ -260,7 +265,8 @@ Launch the interactive TUI search interface.
 | **Ctrl+F** (in TUI) | Toggle global/current-directory filtering |
 | **j/k** or **↑/↓** (in TUI)| Navigate search results |
 | **Enter** (in TUI) | Accept selection and copy to clipboard |
-| **Esc** (in TUI) | Close search without selection |
+| **Ctrl+C** (in TUI) | Close search without selection |
+| **Esc** (in TUI) | Clear query; close when the query is empty |
 
 #### `zigstory fzf`
 
@@ -347,6 +353,22 @@ zigstory recalc-rank
 - Batch execution for performance
 - Rebuilds incomplete command statistics and handles gaps in history IDs
 
+#### `zigstory maintenance`
+
+Rebuild and validate the FTS index, then run SQLite's `PRAGMA optimize`. Normal
+startup checks the schema version rather than scanning history or retrying ALTERs.
+Existing databases receive a transactional, one-time migration; newer unsupported
+schema versions are rejected without downgrading.
+
+```powershell
+zigstory maintenance
+```
+
+FTS triggers continue maintaining inserts, command edits, ID changes, and deletes.
+Rank/hash-only updates no longer rewrite FTS entries. Use this explicit command
+after suspected FTS inconsistency; rank/statistics repair remains `recalc-rank`.
+PowerShell recording remains immediate, without a new batching delay.
+
 #### `zigstory help`
 
 Display comprehensive help documentation.
@@ -398,7 +420,7 @@ See [docs/plan.md](docs/plan.md) for the detailed development roadmap.
 - ✅ **Detailed Stats**: `zigstory stats` command with ASCII visualizations
 - ✅ **fzf Integration**: `zigstory fzf` command with Ctrl+F binding
 - ✅ **Performance**: Recalculation of 10k entries in <1s
-- ⏳ **Predictor Integration**: Update predictor to use rank-based sorting (planned)
+- ✅ **Predictor Integration**: Rank-based sorting with committed-write cache invalidation
 - ✅ **Directory Filtering**: Context-aware browsing and search in TUI
 
 ## 🤝 Contributing

@@ -13,21 +13,9 @@ pub const History = struct {
 };
 
 const ranking = @import("ranking.zig");
+const record = @import("record.zig");
 
-// ─── Low-level helpers ────────────────────────────────────────────────────────
-//
-// Under Zig 0.16 on Windows x64, sqlite3_prepare_v2 / sqlite3_prepare_v3
-// called through zig-sqlite's wrapper returns SQLITE_OK but ppStmt = null
-// for valid SQL.  The root cause appears to be a codegen / ABI issue in the
-// @intCast(query.len) → c_int path inside prepareWithTail.
-//
-// Work-around: use sqlite3_exec (which calls sqlite3_prepare_v2 internally
-// in C, bypassing Zig's argument-passing) for all statements that do not
-// need to return rows.  For statements that DO return rows we use a tiny
-// C-callback trampoline via sqlite3_exec.
-//
-// For SELECT queries that return a single scalar row (the FTS rebuild check)
-// we store the result through a callback context struct.
+pub const schema_version = 1;
 
 /// Execute one or more SQL statements that produce no result rows.
 /// Wraps sqlite3_exec with a null callback.
@@ -36,29 +24,11 @@ fn rawExec(db: *sqlite.Db, sql: [:0]const u8) !void {
     if (rc != sqlite.c.SQLITE_OK) return error.SQLiteError;
 }
 
-/// Context for rawQuery64 below.
-const ScalarPair = struct { c: i64, m: i64 };
-
-/// sqlite3_exec callback: reads two integer columns into a *ScalarPair.
-fn scalarPairCallback(
-    ctx: ?*anyopaque,
-    argc: c_int,
-    argv: [*c][*c]u8,
-    _: [*c][*c]u8,
-) callconv(.c) c_int {
-    if (argc < 2) return 0;
-    const pair: *ScalarPair = @ptrCast(@alignCast(ctx.?));
-    if (argv[0]) |s| pair.c = std.fmt.parseInt(i64, std.mem.sliceTo(s, 0), 10) catch 0;
-    if (argv[1]) |s| pair.m = std.fmt.parseInt(i64, std.mem.sliceTo(s, 0), 10) catch 0;
-    return 0;
-}
-
-/// Run a SELECT that returns one row with two i64 columns (c, m).
-fn rawQueryPair(db: *sqlite.Db, sql: [:0]const u8) !ScalarPair {
-    var result = ScalarPair{ .c = 0, .m = 0 };
-    const rc = sqlite.c.sqlite3_exec(db.db, sql.ptr, scalarPairCallback, &result, null);
-    if (rc != sqlite.c.SQLITE_OK) return error.SQLiteError;
-    return result;
+fn queryInt(db: *sqlite.Db, comptime sql: []const u8) !i64 {
+    var stmt = try db.prepare(sql);
+    defer stmt.deinit();
+    var rows = try stmt.iterator(i64, .{});
+    return (try rows.next(.{})) orelse error.MissingDatabaseMetadata;
 }
 
 // ─── initDb ───────────────────────────────────────────────────────────────────
@@ -75,12 +45,31 @@ pub fn initDb(path: [:0]const u8) !sqlite.Db {
     errdefer db.deinit();
 
     // ── PRAGMAs ───────────────────────────────────────────────────────────────
+    try rawExec(&db, "PRAGMA busy_timeout=1000");
     try rawExec(&db, "PRAGMA journal_mode=WAL");
     try rawExec(&db, "PRAGMA synchronous=NORMAL");
-    try rawExec(&db, "PRAGMA busy_timeout=1000");
 
-    // ── Schema (CREATE TABLE / INDEX / FTS / TRIGGERS) ────────────────────────
-    // IF NOT EXISTS handles existing objects; genuine failures are propagated.
+    try ensureSchema(&db);
+    return db;
+}
+
+pub fn ensureSchema(db: *sqlite.Db) !void {
+    const version = try queryInt(db, "PRAGMA user_version");
+    if (version > schema_version) return error.UnsupportedSchemaVersion;
+    if (version < schema_version) try migrate(db);
+}
+
+fn migrate(db: *sqlite.Db) !void {
+    try rawExec(db, "BEGIN IMMEDIATE");
+    errdefer record.rollback(db);
+    // Another process may have migrated while this connection waited for the lock.
+    const version = try queryInt(db, "PRAGMA user_version");
+    if (version > schema_version) return error.UnsupportedSchemaVersion;
+    if (version == schema_version) {
+        try rawExec(db, "COMMIT");
+        return;
+    }
+    const had_fts = try queryInt(db, "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'history_fts'") != 0;
     const ddl = [_][:0]const u8{
         \\CREATE TABLE IF NOT EXISTS history (
         \\    id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,7 +95,9 @@ pub fn initDb(path: [:0]const u8) !sqlite.Db {
         \\      VALUES('delete', old.id, old.cmd);
         \\END
         ,
-        \\CREATE TRIGGER IF NOT EXISTS history_au AFTER UPDATE ON history BEGIN
+        "DROP TRIGGER IF EXISTS history_au",
+        \\CREATE TRIGGER history_au AFTER UPDATE OF cmd, id ON history
+        \\WHEN old.cmd IS NOT new.cmd OR old.id IS NOT new.id BEGIN
         \\  INSERT INTO history_fts(history_fts, rowid, cmd)
         \\      VALUES('delete', old.id, old.cmd);
         \\  INSERT INTO history_fts(rowid, cmd) VALUES (new.id, new.cmd);
@@ -114,19 +105,24 @@ pub fn initDb(path: [:0]const u8) !sqlite.Db {
         ,
     };
     for (ddl) |stmt| {
-        try rawExec(&db, stmt);
+        try rawExec(db, stmt);
     }
-
-    // ── FTS5 rebuild check ────────────────────────────────────────────────────
-    const fts = try rawQueryPair(&db, "SELECT count(*) AS c, COALESCE(MAX(rowid),0) AS m FROM history_fts");
-    const hist = try rawQueryPair(&db, "SELECT count(*) AS c, COALESCE(MAX(id),0) AS m FROM history");
-
-    if (hist.c != fts.c or hist.m != fts.m) {
-        try rawExec(&db, "INSERT INTO history_fts(history_fts) VALUES('rebuild')");
+    if (!had_fts) {
+        try rawExec(db, "INSERT INTO history_fts(history_fts) VALUES('rebuild')");
     }
+    try ranking.initRanking(db);
+    try rawExec(db, "PRAGMA user_version=1");
+    try rawExec(db, "COMMIT");
+}
 
-    // ── Ranking system ────────────────────────────────────────────────────────
-    try ranking.initRanking(&db);
-
-    return db;
+/// Explicitly rebuild and validate the external-content FTS index.
+pub fn maintain(db: *sqlite.Db) !void {
+    {
+        try rawExec(db, "BEGIN IMMEDIATE");
+        errdefer record.rollback(db);
+        try rawExec(db, "INSERT INTO history_fts(history_fts) VALUES('rebuild')");
+        try rawExec(db, "INSERT INTO history_fts(history_fts, rank) VALUES('integrity-check', 1)");
+        try rawExec(db, "COMMIT");
+    }
+    try rawExec(db, "PRAGMA optimize");
 }

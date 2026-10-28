@@ -69,6 +69,11 @@ try {
     Assert-True ($latest.last_cmd -ceq 'last' -and $latest.last_exit_code -eq 2) 'Latest metrics break timestamp ties by entry ID'
     $empty = & $Global:ZigstoryBin perf --cwd 'unknown' --format json | ConvertFrom-Json
     Assert-True ($empty.total_commands -eq 0) 'Unknown directory produces valid empty metrics'
+    $maintenance = & $Global:ZigstoryBin maintenance 2>&1 | Out-String
+    Assert-True ($LASTEXITCODE -eq 0) 'Explicit maintenance exits successfully'
+    Assert-True ($maintenance.Contains('rebuilt and validated')) 'Maintenance reports FTS rebuilding and validation'
+    $afterMaintenance = & $Global:ZigstoryBin perf --cwd $cwd --format json | ConvertFrom-Json
+    Assert-True ($afterMaintenance.last_cmd -ceq $command -and $afterMaintenance.total_commands -eq 1) 'Maintenance preserves recorded history'
 } finally {
     $env:USERPROFILE = $originalHome
     $env:HOME = $originalUnixHome

@@ -31,8 +31,8 @@ pub fn recalcRanks(params: RecalcParams, allocator: std.mem.Allocator, io: std.I
     });
     defer db.deinit();
 
-    // Initialize ranking tables (safe to run even if already initialized)
-    try ranking.initRanking(&db);
+    if (sqlite.c.sqlite3_busy_timeout(db.db, 1000) != sqlite.c.SQLITE_OK) return error.SQLiteError;
+    try zigstory.db.ensureSchema(&db);
 
     if (params.verbose) {
         std.debug.print("Initializing ranking system...\n", .{});

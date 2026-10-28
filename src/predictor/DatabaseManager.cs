@@ -16,11 +16,18 @@ public sealed class DatabaseManager : IDisposable
     {
         if (string.IsNullOrWhiteSpace(dbPath))
             throw new ArgumentException("Database path cannot be null or empty", nameof(dbPath));
+        if (maxPoolSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxPoolSize));
 
         _maxPoolSize = maxPoolSize;
         _currentPoolSize = 0;
         _connectionPool = new ConcurrentBag<SqliteConnection>();
-        _connectionString = $"Data Source={dbPath};Mode=ReadOnly;Pooling=True;Cache=Shared";
+        _connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = true,
+        }.ToString();
     }
 
     public SqliteConnection GetConnection()

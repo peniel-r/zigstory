@@ -15,6 +15,100 @@ fn scalar(db: *sqlite.Db, comptime sql: []const u8) !i64 {
     return (try rows.next(.{})).?.value;
 }
 
+test "schema upgrades legacy history once and reopening avoids full-history scans" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "legacy.db", .data = "" });
+    const path = try tmp.dir.realPathFileAlloc(io, "legacy.db", allocator);
+    defer allocator.free(path);
+    {
+        var db = try sqlite.Db.init(.{ .mode = .{ .File = path }, .open_flags = .{ .write = true } });
+        defer db.deinit();
+        try db.exec("CREATE TABLE history (id INTEGER PRIMARY KEY, cmd TEXT, cwd TEXT, exit_code INTEGER, duration_ms INTEGER, timestamp INTEGER)", .{}, .{});
+        try db.exec(
+            \\WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i < 10000)
+            \\INSERT INTO history SELECT i, printf('legacy %06d',i), 'C:\repo', 0, 0, i FROM n
+        , .{}, .{});
+    }
+    var schema: i64 = 0;
+    {
+        var db = try zigstory.db.initDb(path);
+        defer db.deinit();
+        try std.testing.expectEqual(@as(i64, zigstory.db.schema_version), try scalar(&db, "PRAGMA user_version"));
+        try std.testing.expectEqual(@as(i64, 10000), try scalar(&db, "SELECT COUNT(*) FROM history_fts WHERE history_fts MATCH 'legacy'"));
+        try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "SELECT COUNT(*) FROM pragma_table_info('history') WHERE name IN ('rank','cmd_hash')"));
+        schema = try scalar(&db, "PRAGMA schema_version");
+    }
+    var db = try zigstory.db.initDb(path);
+    defer db.deinit();
+    var misses: c_int = 0;
+    var high_water: c_int = 0;
+    try std.testing.expectEqual(sqlite.c.SQLITE_OK, sqlite.c.sqlite3_db_status(db.db, sqlite.c.SQLITE_DBSTATUS_CACHE_MISS, &misses, &high_water, 0));
+    try std.testing.expect(misses < 50);
+    try std.testing.expectEqual(schema, try scalar(&db, "PRAGMA schema_version"));
+}
+
+test "explicit maintenance repairs FTS and metadata updates leave it untouched" {
+    var db = try zigstory.db.initDb(":memory:");
+    defer db.deinit();
+    try add.addCommand(&db, .{ .cmd = "echo original", .cwd = "local", .exit_code = 0, .duration_ms = 0 }, allocator, io);
+    const before = sqlite.c.sqlite3_total_changes(db.db);
+    try db.exec("UPDATE history SET rank = 123, cmd_hash = 'changed' WHERE id = 1", .{}, .{});
+    try std.testing.expectEqual(@as(c_int, 1), sqlite.c.sqlite3_total_changes(db.db) - before);
+    try db.exec("INSERT INTO history_fts(history_fts,rowid,cmd) VALUES('delete',1,'echo original')", .{}, .{});
+    try std.testing.expectEqual(@as(i64, 0), try scalar(&db, "SELECT COUNT(*) FROM history_fts WHERE history_fts MATCH 'original'"));
+    try zigstory.db.maintain(&db);
+    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT COUNT(*) FROM history_fts WHERE history_fts MATCH 'original'"));
+    try db.exec("UPDATE history SET cmd = 'echo renamed' WHERE id = 1", .{}, .{});
+    try std.testing.expectEqual(@as(i64, 0), try scalar(&db, "SELECT COUNT(*) FROM history_fts WHERE history_fts MATCH 'original'"));
+    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT COUNT(*) FROM history_fts WHERE history_fts MATCH 'renamed'"));
+    try db.exec("UPDATE history SET id = 42 WHERE id = 1", .{}, .{});
+    try std.testing.expectEqual(@as(i64, 42), try scalar(&db, "SELECT rowid FROM history_fts WHERE history_fts MATCH 'renamed'"));
+    try db.exec("DELETE FROM history WHERE id = 42", .{}, .{});
+    try std.testing.expectEqual(@as(i64, 0), try scalar(&db, "SELECT COUNT(*) FROM history_fts WHERE history_fts MATCH 'renamed'"));
+}
+
+test "failed migrations roll back all schema changes and preserve legacy history" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "broken.db", .data = "" });
+    const path = try tmp.dir.realPathFileAlloc(io, "broken.db", allocator);
+    defer allocator.free(path);
+    {
+        var db = try sqlite.Db.init(.{ .mode = .{ .File = path }, .open_flags = .{ .write = true } });
+        defer db.deinit();
+        try db.exec("CREATE TABLE history (id INTEGER PRIMARY KEY, cmd TEXT, cwd TEXT, timestamp INTEGER)", .{}, .{});
+        try db.exec("INSERT INTO history VALUES(1,'legacy','local',1)", .{}, .{});
+        try db.exec("CREATE TABLE idx_rank (conflict TEXT)", .{}, .{});
+    }
+    try std.testing.expectError(error.SQLiteError, zigstory.db.initDb(path));
+    var db = try sqlite.Db.init(.{ .mode = .{ .File = path }, .open_flags = .{ .write = true } });
+    defer db.deinit();
+    try std.testing.expectEqual(@as(i64, 0), try scalar(&db, "PRAGMA user_version"));
+    try std.testing.expectEqual(@as(i64, 0), try scalar(&db, "SELECT COUNT(*) FROM pragma_table_info('history') WHERE name IN ('rank','cmd_hash')"));
+    try std.testing.expectEqual(@as(i64, 0), try scalar(&db, "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'history_fts'"));
+    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT COUNT(*) FROM history"));
+}
+
+test "newer database versions are rejected without downgrading" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "future.db", .data = "" });
+    const path = try tmp.dir.realPathFileAlloc(io, "future.db", allocator);
+    defer allocator.free(path);
+    {
+        var db = try sqlite.Db.init(.{ .mode = .{ .File = path }, .open_flags = .{ .write = true } });
+        defer db.deinit();
+        try db.exec("PRAGMA user_version=999", .{}, .{});
+    }
+    try std.testing.expectError(error.UnsupportedSchemaVersion, zigstory.db.initDb(path));
+    try std.testing.expectError(error.UnsupportedSchemaVersion, recalc.recalcRanks(.{ .db_path = path }, allocator, io));
+    var db = try sqlite.Db.init(.{ .mode = .{ .File = path }, .open_flags = .{ .write = true } });
+    defer db.deinit();
+    try std.testing.expectEqual(@as(i64, 999), try scalar(&db, "PRAGMA user_version"));
+    try std.testing.expectEqual(@as(i64, 0), try scalar(&db, "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'history'"));
+}
+
 test "time and directory indexes cover deterministic latest-entry queries" {
     var db = try zigstory.db.initDb(":memory:");
     defer db.deinit();

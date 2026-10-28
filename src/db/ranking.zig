@@ -49,49 +49,46 @@ pub fn getCommandHash(cmd: []const u8, allocator: std.mem.Allocator) ![]const u8
 
 /// Create command_stats table for tracking frequency
 pub fn createCommandStatsTable(db: *sqlite.Db) !void {
-    db.execDynamic(
+    try db.execDynamic(
         \\CREATE TABLE IF NOT EXISTS command_stats (
         \\    cmd_hash TEXT PRIMARY KEY,
         \\    cmd TEXT NOT NULL,
         \\    frequency INTEGER DEFAULT 1,
         \\    last_used INTEGER NOT NULL
         \\)
-    , .{}, .{}) catch |err| switch (err) {
-        error.SQLiteError, error.EmptyQuery => {},
-        else => return err,
-    };
+    , .{}, .{});
 }
 
 /// Add cmd_hash column to history table
 pub fn addCmdHashColumn(db: *sqlite.Db) !void {
-    db.execDynamic("ALTER TABLE history ADD COLUMN cmd_hash TEXT", .{}, .{}) catch |err| switch (err) {
-        error.SQLiteError, error.EmptyQuery => {},
-        else => return err,
-    };
+    try addColumnIfMissing(db, "cmd_hash", "TEXT");
 }
 
 /// Add rank column to history table
 pub fn addRankColumn(db: *sqlite.Db) !void {
-    db.execDynamic("ALTER TABLE history ADD COLUMN rank REAL DEFAULT 0", .{}, .{}) catch |err| switch (err) {
-        error.SQLiteError, error.EmptyQuery => {},
-        else => return err,
+    try addColumnIfMissing(db, "rank", "REAL DEFAULT 0");
+}
+
+fn addColumnIfMissing(db: *sqlite.Db, comptime name: []const u8, comptime definition: []const u8) !void {
+    const exists = blk: {
+        var stmt = try db.prepare("SELECT COUNT(*) FROM pragma_table_info('history') WHERE name = '" ++ name ++ "'");
+        defer stmt.deinit();
+        var rows = try stmt.iterator(i64, .{});
+        break :blk (try rows.next(.{})).? != 0;
     };
+    if (!exists) {
+        try db.exec("ALTER TABLE history ADD COLUMN " ++ name ++ " " ++ definition, .{}, .{});
+    }
 }
 
 /// Create index on rank column
 pub fn createRankIndex(db: *sqlite.Db) !void {
-    db.execDynamic("CREATE INDEX IF NOT EXISTS idx_rank ON history(rank DESC, timestamp DESC)", .{}, .{}) catch |err| switch (err) {
-        error.SQLiteError, error.EmptyQuery => {},
-        else => return err,
-    };
+    try db.execDynamic("CREATE INDEX IF NOT EXISTS idx_rank ON history(rank DESC, timestamp DESC)", .{}, .{});
 }
 
 /// Create index on cmd_hash column
 pub fn createCmdHashIndex(db: *sqlite.Db) !void {
-    db.execDynamic("CREATE INDEX IF NOT EXISTS idx_cmd_hash ON history(cmd_hash)", .{}, .{}) catch |err| switch (err) {
-        error.SQLiteError, error.EmptyQuery => {},
-        else => return err,
-    };
+    try db.execDynamic("CREATE INDEX IF NOT EXISTS idx_cmd_hash ON history(cmd_hash)", .{}, .{});
 }
 
 /// Backfill cmd_hash for existing history entries that don't have it
@@ -178,38 +175,11 @@ pub fn backfillCmdHashes(db: *sqlite.Db, allocator: std.mem.Allocator) !void {
 
 /// Initialize ranking tables and columns
 pub fn initRanking(db: *sqlite.Db) !void {
-    // Create command_stats table
-    createCommandStatsTable(db) catch |err| {
-        // Ignore error if table already exists
-        if (err != error.SQLiteError) return err;
-    };
-
-    // Add cmd_hash column to history table
-    addCmdHashColumn(db) catch |err| {
-        // Ignore error if column already exists
-        if (err != error.SQLiteError) return err;
-    };
-
-    // Add rank column to history table
-    addRankColumn(db) catch |err| {
-        // Ignore error if column already exists
-        if (err != error.SQLiteError) return err;
-    };
-
-    // Create index on rank
-    createRankIndex(db) catch |err| {
-        // Ignore error if index already exists
-        if (err != error.SQLiteError) return err;
-    };
-
-    // Create index on cmd_hash
-    createCmdHashIndex(db) catch |err| {
-        // Ignore error if index already exists
-        if (err != error.SQLiteError) return err;
-    };
-
-    // Note: backfillCmdHashes is not called here to avoid circular dependency issues
-    // It should be called from the main initialization if needed
+    try createCommandStatsTable(db);
+    try addCmdHashColumn(db);
+    try addRankColumn(db);
+    try createRankIndex(db);
+    try createCmdHashIndex(db);
 }
 
 /// Update command frequency and recency stats when a command is executed
