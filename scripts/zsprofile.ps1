@@ -368,7 +368,14 @@ if (Test-Path $Global:ZigstoryBin) {
             Set-Clipboard -Value "__ZS_CANCEL__"
             
             # Start-Process -NoNewWindow is more reliable for TUIs from key handlers
-            $p = Start-Process -FilePath $Global:ZigstoryBin -ArgumentList "search" -Wait -NoNewWindow -PassThru
+            $savedLaunch = $env:ZIGSTORY_TUI_LAUNCH_NS
+            try {
+                if ($env:ZIGSTORY_TUI_PROFILE) {
+                    $env:ZIGSTORY_TUI_LAUNCH_NS = [string][decimal]::Truncate(
+                        [decimal][Diagnostics.Stopwatch]::GetTimestamp() * 1000000000 / [Diagnostics.Stopwatch]::Frequency)
+                }
+                $p = Start-Process -FilePath $Global:ZigstoryBin -ArgumentList "search" -Wait -NoNewWindow -PassThru
+            } finally { $env:ZIGSTORY_TUI_LAUNCH_NS = $savedLaunch }
             
             $selected = Get-Clipboard -Raw
             if ($selected -and $selected -ne "__ZS_CANCEL__") {

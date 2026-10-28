@@ -1,5 +1,8 @@
-#Requires -Version 7.0
-param([string]$BackupRoot = (Join-Path $env:USERPROFILE '.zigstory-backups'))
+#Requires -Version 7.4
+param(
+    [string]$BackupRoot = (Join-Path $env:USERPROFILE '.zigstory-backups'),
+    [string]$PackageDirectory
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -15,7 +18,7 @@ function Assert-ZigstoryUpgradeIdle {
         $parentId = [int]$parent.ParentProcessId
     }
     foreach ($process in $processes) {
-        if ($process.Name -notmatch '^(pwsh|powershell|zigstory|zigstory-tui-profile|zigstory-startup-profile|zigstory-search-benchmark)\.exe$' -or
+        if ($process.Name -notmatch '^(pwsh|powershell|zigstory|zigstory-tui-profile|zigstory-startup-profile|zigstory-startup-probe|zigstory-search-benchmark)\.exe$' -or
             $process.ProcessId -eq $PID) { continue }
         $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid
         if ($owner.ReturnValue -ne 0) {
@@ -98,6 +101,36 @@ try {
     if ($result.ExitCode -ne 0) { throw "Predictor validation failed: $($result.ErrorOutput)" }
 }
 
+function Test-ZigstoryReleaseBundle([string]$Directory) {
+    $root = [IO.Path]::GetFullPath($Directory).TrimEnd('\')
+    $manifestPath = Join-Path $root 'release-manifest.json'
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    if ($manifest.schema -ne 1 -or $manifest.platform -ne 'win-x64' -or
+        $manifest.version -notmatch '^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$') {
+        throw 'Unsupported release manifest.'
+    }
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in $manifest.files) {
+        $path = [IO.Path]::GetFullPath((Join-Path $root $entry.path))
+        if (-not $path.StartsWith("$root\", [StringComparison]::OrdinalIgnoreCase) -or
+            -not $seen.Add($path) -or $entry.sha256 -notmatch '^[A-Fa-f0-9]{64}$') {
+            throw 'Invalid or duplicate release manifest path/hash.'
+        }
+        if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $entry.sha256) {
+            throw "Release checksum mismatch: $($entry.path)"
+        }
+    }
+    foreach ($file in Get-ChildItem -LiteralPath $root -File -Recurse -Force) {
+        if ($file.FullName -ne $manifestPath -and -not $seen.Contains($file.FullName)) {
+            throw "Unlisted file in release: $($file.FullName)"
+        }
+    }
+    foreach ($required in @('zig-out\bin\zigstory.exe', 'scripts\zsprofile.ps1', 'scripts\safe-upgrade.ps1',
+        'predictor\zigstoryPredictor.dll', 'predictor\Microsoft.Data.Sqlite.dll', 'predictor\e_sqlite3.dll')) {
+        if (-not $seen.Contains((Join-Path $root $required))) { throw "Release is missing required file: $required" }
+    }
+}
+
 function Test-ZigstoryUpgradeExecutable([string]$Path, [switch]$Installed) {
     $result = Invoke-ZigstoryUpgradeCommand $Path @('help')
     if ($result.ExitCode -ne 0 -or ($result.Output + $result.ErrorOutput) -notmatch '--consume') {
@@ -120,8 +153,13 @@ function Invoke-ZigstorySafeUpgrade {
         [string]$ProfileScript,
         [string]$HistoryDirectory,
         [string]$BackupRoot,
-        [string]$PredictorDirectory = (Join-Path $env:USERPROFILE 'Documents\PowerShell\Modules\zigstoryPredictor')
+        [string]$PredictorDirectory = (Join-Path $env:USERPROFILE 'Documents\PowerShell\Modules\zigstoryPredictor'),
+        [string]$PackageDirectory
     )
+    if ($PackageDirectory) {
+        Test-ZigstoryReleaseBundle $PackageDirectory
+        $RepositoryRoot = [IO.Path]::GetFullPath($PackageDirectory)
+    }
     $sourceExe = Join-Path $RepositoryRoot 'zig-out\bin\zigstory.exe'
     $sourceProfile = Join-Path $RepositoryRoot 'scripts\zsprofile.ps1'
     foreach ($path in @($sourceExe, $sourceProfile, $InstallExe, $ProfileScript)) {
@@ -147,6 +185,14 @@ function Invoke-ZigstorySafeUpgrade {
 
     if ([AppDomain]::CurrentDomain.GetAssemblies().GetName().Name -contains 'zigstoryPredictor') {
         throw 'Predictor is loaded in this process. Run safe-upgrade from pwsh -NoProfile.'
+    }
+    if ($PackageDirectory) {
+        $published = Join-Path $PackageDirectory 'predictor'
+        Test-ZigstoryUpgradePredictor $published
+        Invoke-ZigstoryUpgradeReplacement -SourceExe $sourceExe -SourceProfile $sourceProfile `
+            -InstallExe $InstallExe -ProfileScript $ProfileScript -HistoryDirectory $HistoryDirectory `
+            -BackupPath $backupPath -PredictorDirectory $PredictorDirectory -PublishedPredictor $published
+        return
     }
     $stage = Join-Path ([IO.Path]::GetTempPath()) "zigstory-predictor-upgrade-$([Guid]::NewGuid().ToString('N'))"
     $null = New-Item -ItemType Directory -Path $stage
@@ -280,5 +326,5 @@ if ($MyInvocation.InvocationName -ne '.') {
     Invoke-ZigstorySafeUpgrade -RepositoryRoot (Split-Path $PSScriptRoot -Parent) `
         -InstallExe (Join-Path $env:APPDATA 'zigstory\zigstory.exe') `
         -ProfileScript (Join-Path (Split-Path $PROFILE.CurrentUserCurrentHost) 'zsprofile.ps1') `
-        -HistoryDirectory (Join-Path $env:USERPROFILE '.zigstory') -BackupRoot $BackupRoot
+        -HistoryDirectory (Join-Path $env:USERPROFILE '.zigstory') -BackupRoot $BackupRoot -PackageDirectory $PackageDirectory
 }

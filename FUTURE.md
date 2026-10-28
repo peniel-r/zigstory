@@ -1,6 +1,6 @@
 # Future Improvements & Roadmap
 
-> **Status**: Ideas Collection | **Last Updated**: February 2, 2026
+> **Status**: Ideas Collection (not a committed implementation backlog) | **Last Updated**: October 28, 2026
 
 This document outlines potential future features, integrations, and architectural improvements for **zigstory**.
 
@@ -8,22 +8,20 @@ This document outlines potential future features, integrations, and architectura
 
 ## 1. DevOps & Automation
 
-Establishing robust CI/CD is critical for a cross-platform tool involving multiple languages (Zig, C#, PowerShell).
+The project currently uses local builds and validation, not GitHub Actions.
 
 ### Unified Release Pipeline
-- **Goal**: Automate cross-platform builds and releases.
-- **Implementation**: GitHub Actions workflow.
-  - Install Zig and .NET SDKs.
-  - Build Zig CLI (`zig build -Doptimize=ReleaseFast`).
-  - Build C# Predictor (`dotnet publish`).
-  - Package artifacts (`.zip` for Windows, `.tar.gz` for Linux/macOS).
-  - Draft GitHub Release with semantic versioning.
+- **Implemented for Windows x64**: `just release <version>` builds, publishes,
+  validates and packages a ZIP plus SHA256 sidecar. Extracted bundles support
+  backup-aware upgrades without a local compiler or SDK.
+- Cross-platform archives and public release publishing remain optional roadmap
+  ideas, not requirements of the completed Windows optimization pass.
 
 ### Performance Regression Gating
-- **Goal**: Maintain sub-5ms latency.
-- **Implementation**:
-  - Run `tests/benchmark.zig` in CI.
-  - Fail PR if latency exceeds thresholds (e.g., >10ms for search).
+- **Implemented locally**: `just performance` checks synthetic 100k-row
+  correctness, latency and memory budgets; `just terminal-profile` measures actual
+  terminal first-frame/output timings. See `tests\README.md` for scoped thresholds.
+- No blanket sub-5ms startup/search guarantee or hosted CI gate is assumed.
 
 ### Cross-Platform Verification
 - **Goal**: Ensure reliability across OSs.

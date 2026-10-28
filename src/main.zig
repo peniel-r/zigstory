@@ -15,6 +15,7 @@ const ranking = zigstory.ranking;
 const recalc = @import("cli/recalc.zig");
 const perf = @import("cli/perf.zig");
 const logging = @import("logging.zig");
+const timing = @import("tui/timing.zig");
 
 pub const std_options: std.Options = .{ .logFn = logging.logFn, .log_level = .debug };
 
@@ -28,20 +29,24 @@ fn getHomeDir(environ_map: *std.process.Environ.Map) ?[]const u8 {
 }
 
 pub fn main(init: std.process.Init) !void {
+    var metrics = try timing.Metrics.init(init.io, init.environ_map);
+    defer if (metrics) |*value| {
+        value.save() catch |err| std.debug.print("TUI profiling failed: {}\n", .{err});
+    };
     var logger = logging.Logger.init(init.io, std.heap.page_allocator, init.environ_map) catch |err| {
         std.debug.print("zigstory logging initialization failed: {}\n", .{err});
-        return run(init);
+        return run(init, if (metrics) |*value| value else null);
     };
     defer logger.deinit();
     logging.active = &logger;
     defer logging.active = null;
-    run(init) catch |err| {
+    run(init, if (metrics) |*value| value else null) catch |err| {
         std.log.err("Command failed: {}", .{err});
         return err;
     };
 }
 
-fn run(init: std.process.Init) !void {
+fn run(init: std.process.Init, metrics: ?*timing.Metrics) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -130,7 +135,7 @@ fn run(init: std.process.Init) !void {
             defer allocator.free(cwd);
 
             // Launch TUI search interface
-            const result = tui.search(allocator, &db, cwd, init.io, init.environ_map) catch |err| {
+            const result = tui.search(allocator, &db, cwd, init.io, init.environ_map, metrics) catch |err| {
                 std.log.err("Error launching TUI: {}", .{err});
                 std.process.exit(1);
             };

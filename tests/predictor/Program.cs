@@ -3,6 +3,20 @@ using System.Management.Automation.Subsystem.Prediction;
 using Microsoft.Data.Sqlite;
 using zigstoryPredictor;
 
+if (args.Length > 0 && args[0] == "--terminal-child")
+{
+    if (args.Length != 2) throw new ArgumentException("Usage: --terminal-child <zigstory.exe>");
+    Environment.ExitCode = TerminalChecks.RunChild(args[1]);
+    return;
+}
+
+if (args.Length > 0 && args[0] == "--terminal-check")
+{
+    if (args.Length != 2) throw new ArgumentException("Usage: --terminal-check <zigstory.exe>");
+    TerminalChecks.Run(args[1]);
+    return;
+}
+
 if (args.Length > 0 && args[0] == "--performance-check")
 {
     if (args.Length != 4) throw new ArgumentException("Usage: --performance-check <zigstory.exe> <zigstory-tui-profile.exe> <zigstory-search-benchmark.exe>");

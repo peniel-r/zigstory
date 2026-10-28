@@ -9,6 +9,7 @@ $originalHome = $env:USERPROFILE
 $originalUnixHome = $env:HOME
 $repo = Split-Path $PSScriptRoot -Parent
 . (Join-Path $repo 'scripts\safe-upgrade.ps1')
+. (Join-Path $repo 'scripts\release.ps1') -Version '0.0.0-test'
 $realPublish = ${function:Publish-ZigstoryUpgradePredictor}
 $realPredictorValidation = ${function:Test-ZigstoryUpgradePredictor}
 
@@ -242,6 +243,34 @@ try {
     [IO.File]::WriteAllText($script:sourceProfile, 'function broken {')
     Assert-Throws { Invoke-ZigstorySafeUpgrade @arguments } 'Profile syntax validation failed'
     Assert-True (-not (Test-Path -LiteralPath $arguments.BackupRoot)) 'Invalid source profile fails before any backup or installation changes'
+
+    $script:mode = 'success'
+    $archive = New-ZigstoryReleaseBundle $repo $script:published (Join-Path $directory 'releases') '0.0.0-test'
+    Assert-True ((Get-Content -LiteralPath "$archive.sha256" -Raw).StartsWith((Get-FileHash -LiteralPath $archive).Hash)) 'Release ZIP has a matching SHA256 sidecar'
+    Assert-Throws { New-ZigstoryReleaseBundle $repo $script:published (Split-Path $archive) '0.0.0-test' } 'already exists'
+    $bundle = Join-Path $directory 'extracted release'
+    [IO.Compression.ZipFile]::ExtractToDirectory($archive, $bundle)
+    Test-ZigstoryReleaseBundle $bundle
+    $unexpected = Join-Path $bundle 'unexpected.txt'
+    [IO.File]::WriteAllText($unexpected, 'unexpected release file')
+    Assert-Throws { Test-ZigstoryReleaseBundle $bundle } 'Unlisted file'
+    Remove-Item -LiteralPath $unexpected
+    $releaseManifest = Join-Path $bundle 'release-manifest.json'
+    $originalManifest = [IO.File]::ReadAllText($releaseManifest)
+    $invalidManifest = $originalManifest | ConvertFrom-Json
+    $invalidManifest.files[0].path = '..\outside.dll'
+    $invalidManifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $releaseManifest
+    Assert-Throws { Test-ZigstoryReleaseBundle $bundle } 'Invalid or duplicate'
+    [IO.File]::WriteAllText($releaseManifest, $originalManifest)
+    $arguments.PackageDirectory = $bundle
+    $arguments.BackupRoot = Join-Path $directory 'bundle-upgrade-backups'
+    $script:mode = 'fail-publish'
+    Invoke-ZigstorySafeUpgrade @arguments
+    Assert-True ((Get-FileHash -LiteralPath (Join-Path $script:predictor 'zigstoryPredictor.dll')).Hash -eq
+        (Get-FileHash -LiteralPath (Join-Path $bundle 'predictor\zigstoryPredictor.dll')).Hash) 'Prebuilt release upgrades without invoking dotnet publish'
+    [IO.File]::AppendAllText((Join-Path $bundle 'scripts\zsprofile.ps1'), '# tampered')
+    Assert-Throws { Invoke-ZigstorySafeUpgrade @arguments } 'checksum mismatch'
+    Assert-True (@(Get-ChildItem -LiteralPath $arguments.BackupRoot -Directory).Count -eq 1) 'Tampered release fails before making another backup'
 } finally {
     $env:USERPROFILE = $originalHome
     $env:HOME = $originalUnixHome

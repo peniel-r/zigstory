@@ -6,6 +6,7 @@ const search_logic = @import("search.zig");
 const render = @import("render.zig");
 const navigation = @import("navigation.zig");
 const directory_filter = @import("directory_filter.zig");
+const timing = @import("timing.zig");
 
 /// Custom panic handler for proper terminal cleanup
 pub const panic = vaxis.panic_handler;
@@ -48,6 +49,7 @@ const TuiApp = struct {
     selected_index: usize = 0,
     search_dirty: bool = false,
     draw_dirty: bool = true,
+    metrics: ?*timing.Metrics = null,
 
     // Vim-like command mode
     command_mode: bool = false,
@@ -102,8 +104,10 @@ const TuiApp = struct {
         defer self.loop.stop();
 
         try self.vx.enterAltScreen(self.tty.writer());
+        const negotiation_start = if (self.metrics != null) std.Io.Timestamp.now(self.io, .awake) else undefined;
         // queryTerminal now takes std.Io.Duration instead of nanosecond integer
         try self.vx.queryTerminal(self.tty.writer(), .{ .nanoseconds = std.time.ns_per_s });
+        if (self.metrics) |metrics| metrics.negotiation_ms = metrics.elapsed(negotiation_start);
 
         try self.drawInitialFrame();
 
@@ -111,6 +115,7 @@ const TuiApp = struct {
         while (!self.should_quit) {
             // pollEvent and tryEvent now return error unions in vaxis 0.6
             try self.loop.pollEvent();
+            const input_start = if (self.metrics != null) std.Io.Timestamp.now(self.io, .awake) else undefined;
 
             while (try self.loop.tryEvent()) |event| {
                 try self.handleEvent(event);
@@ -122,8 +127,10 @@ const TuiApp = struct {
             if (self.draw_dirty) {
                 _ = self.arena.reset(.retain_capacity);
                 try self.draw(self.arena.allocator());
+                const write_start = if (self.metrics != null) std.Io.Timestamp.now(self.io, .awake) else undefined;
                 try self.vx.render(self.tty.writer());
                 try self.tty.writer().flush();
+                if (self.metrics) |metrics| metrics.frame(write_start, input_start);
                 self.draw_dirty = false;
             }
         }
@@ -133,8 +140,15 @@ const TuiApp = struct {
         // Windows does not guarantee a resize event when entering the alt screen.
         try self.handleEvent(.{ .winsize = try self.tty.getWinsize() });
         try self.draw(self.arena.allocator());
+        const write_start = if (self.metrics != null) std.Io.Timestamp.now(self.io, .awake) else undefined;
         try self.vx.render(self.tty.writer());
         try self.tty.writer().flush();
+        if (self.metrics) |metrics| {
+            metrics.cols = self.vx.window().width;
+            metrics.rows = self.vx.window().height;
+            metrics.frame(write_start, null);
+            try metrics.save();
+        }
         self.draw_dirty = false;
     }
 
@@ -500,12 +514,15 @@ const TuiApp = struct {
 };
 
 /// Entry point for TUI search interface
-pub fn search(allocator: std.mem.Allocator, db: *sqlite.Db, current_dir: ?[]const u8, io: std.Io, environ_map: *std.process.Environ.Map) !?[]const u8 {
+pub fn search(allocator: std.mem.Allocator, db: *sqlite.Db, current_dir: ?[]const u8, io: std.Io, environ_map: *std.process.Environ.Map, metrics: ?*timing.Metrics) !?[]const u8 {
     // The CLI's command-scoped arena cannot reclaim repeated search allocations.
     const app_allocator = std.heap.smp_allocator;
     var app: TuiApp = undefined;
+    const init_start = if (metrics != null) std.Io.Timestamp.now(io, .awake) else undefined;
     try app.init(app_allocator, db, current_dir, io, environ_map);
     defer app.deinit();
+    app.metrics = metrics;
+    if (metrics) |value| value.terminal_init_ms = value.elapsed(init_start);
     defer if (app.selected_command) |cmd| app_allocator.free(cmd);
     try app.run();
 
@@ -867,4 +884,42 @@ test "read-only substring caches refresh after writes from another connection" {
     try state.loadPage(&reader, 10, 0, false);
     try std.testing.expectEqual(@as(usize, 2), state.total_count);
     try std.testing.expectEqual(@as(i64, 2), state.results[0].id);
+}
+
+test "search aggregate matches window ordering across filters, ties and negative timestamps" {
+    const allocator = std.testing.allocator;
+    var db = try createNavigationTestDb(1);
+    defer db.deinit();
+    try db.exec("DELETE FROM history", .{}, .{});
+    try db.exec(
+        \\WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i < 2000)
+        \\INSERT INTO history SELECT i,printf('match %03d',i % 97),
+        \\ CASE WHEN i % 2=0 THEN 'local' ELSE 'other' END,0,0,(i*17) % 137-70 FROM n
+    , .{}, .{});
+    try db.exec("INSERT INTO history VALUES(2001,'match extreme','local',0,0,-9223372036854775808),(2002,'match extreme','other',0,0,9223372036854775807),(2003,'match extreme','other',0,0,9223372036854775807)", .{}, .{});
+    var state = search_logic.SearchState.init(allocator);
+    defer state.deinit(allocator);
+    try state.query.appendSlice(allocator, "match");
+    for ([_]bool{ false, true }) |local| {
+        state.filter_state = .{ .mode = if (local) .current_dir else .global, .current_dir = "local" };
+        try state.loadPage(&db, 17, 0, true);
+        var expected: std.ArrayListUnmanaged(i64) = .empty;
+        defer expected.deinit(allocator);
+        {
+            var stmt = try db.prepare(
+                \\SELECT id FROM (SELECT id,timestamp,ROW_NUMBER() OVER
+                \\ (PARTITION BY cmd ORDER BY timestamp DESC,id DESC) AS newest FROM history
+                \\ WHERE (?=0 OR cwd='local')) WHERE newest=1 ORDER BY timestamp DESC,id DESC
+            );
+            defer stmt.deinit();
+            var rows = try stmt.iterator(i64, .{@as(i64, if (local) 1 else 0)});
+            while (try rows.next(.{})) |id| try expected.append(allocator, id);
+        }
+        try std.testing.expectEqual(expected.items.len, state.total_count);
+        var offset: usize = 0;
+        while (offset < expected.items.len) : (offset += 17) {
+            try state.loadPage(&db, 17, offset, false);
+            for (state.results, 0..) |row, i| try std.testing.expectEqual(expected.items[offset + i], row.id);
+        }
+    }
 }

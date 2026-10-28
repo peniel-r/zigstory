@@ -12,10 +12,10 @@
 
 ### 🚀 **Blazing Fast Performance**
 
-- **Sub-5ms query performance** with optimized SQLite indexes
-- **<50ms command insertion** with WAL mode and async writes
-- **<100ms TUI startup** with virtual scrolling for 10,000+ entries
-- **Zero PowerShell startup impact** (<10ms overhead measured)
+- **Indexed queries and cached predictions**, with repeatable local performance gates
+- **Immediate asynchronous recording** with WAL mode and durable retry payloads
+- **Paged TUI search** with bounded command-string memory and fast cached page seeks
+- **Opt-in startup and terminal profiling**, separating host launch cost from application work
 
 ### 🧠 **AI-Powered Predictions**
 
@@ -252,6 +252,33 @@ To choose a different backup root, invoke
 `pwsh -NoProfile -File .\scripts\safe-upgrade.ps1 -BackupRoot 'D:\zigstory-backups'`;
 it must be outside the history, executable, profile and predictor directories.
 
+### Prebuilt release upgrades (no local compiler)
+
+On a development machine, `just release 0.0.0-preview` prepares dependencies,
+builds the Windows x64 CLI, publishes the predictor, validates both, and creates
+`dist\zigstory-0.0.0-preview-win-x64.zip` plus its `.sha256` sidecar. Choose the
+intended release version; existing artifacts are never overwritten.
+This is a local release pipeline, not a GitHub Actions workflow.
+
+On the target machine, verify the ZIP's SHA256 against the sidecar obtained from
+a trusted source, extract it, then close other shells and use `pwsh -NoProfile`:
+
+```powershell
+# Replace with the directory where you extracted the trusted release:
+pwsh -NoProfile -File C:\releases\zigstory\scripts\safe-upgrade.ps1 -PackageDirectory C:\releases\zigstory
+# From a source checkout, the equivalent is:
+just safe-upgrade-package 'C:\releases\zigstory'
+```
+
+The package contains executable, hook, upgrade script, complete predictor, README,
+license and a per-file SHA256 manifest. The upgrader verifies required files, all checksums and
+rejects unlisted files before installation. It uses the same backup/rollback
+transaction but skips publishing: **no Zig, Git or .NET SDK is needed on the target**.
+PowerShell 7.4+ (x64) is required for the net8.0 predictor; this upgrades an existing
+zigstory installation. Hashes detect corruption, not authenticity or publisher
+identity; only run bundles from a trusted source. Nothing is uploaded or released
+publicly by this command.
+
 For a manual durable-recording upgrade instead, close existing PowerShell sessions and wait for
 background imports to finish. From `pwsh -NoProfile`, back up your installed
 executable, `zsprofile.ps1`, and the entire `%USERPROFILE%\.zigstory` directory
@@ -459,8 +486,9 @@ copy. It prints counts and aggregate CLI/prediction timings, plus TUI paging are
 usage and sampled process working set, including headless rendering on a
 160-column/240-row stress viewport; no commands or prefixes are printed. CLI
 timings include process startup and empty-directory metrics with warm OS caches.
-The report separately measures a help-only process and internal runtime,
-environment, database, query and shutdown phases using the startup profiler.
+The report separately measures a help-only process, an empty native-process
+baseline (launch/wall/CPU time), and internal runtime, environment, database,
+query and shutdown phases using the startup profiler.
 TUI measurements exercise real search/browsing and rendering code using a discard
 sink; terminal I/O, the input thread, and interactive first-frame latency are excluded.
 
@@ -470,21 +498,25 @@ Run repeatable synthetic correctness/performance gates with:
 just performance
 ```
 
-This builds the CLI and three profiling tools, then checks a private 100,000-row
-fixture. Windows CI runs the same budgets alongside regressions; see
+This builds the CLI and four profiling tools, then checks a private 100,000-row
+fixture. The project uses **local validation, not GitHub Actions**; see
 [`tests\README.md`](tests/README.md) for thresholds and limitations.
 
 Substring searches materialize deduplicated IDs in a SQLite TEMP table once per
 query or detected database change. Indexed page seeks avoid repeating grouping
 and deep OFFSET scans; command strings remain page-bounded, but TEMP storage grows
-with match count. In the local synthetic benchmark, deep-page median fell from
-42.68 ms to 0.039 ms, at a roughly 6% initial-query cost (55.67 to 59.14 ms).
+with match count. A small SQLite aggregate selects the ID at max(timestamp, ID)
+per exact command without the window-function partition sort. On the local
+100k-row/25k-distinct fixture, initial-query median improved from about 60 ms to
+32 ms; deep-page median remains about 0.04 ms (42.68 ms before caching).
 Headless rendering also uses bulk fills, skips unchanged frames, and truncates and
 highlights complete Unicode graphemes using terminal-cell widths.
 
 Startup profiling found roughly 3 ms inside the instrumented phases versus
-170-176 ms for full processes on the measured host. The remaining launch/load
-overhead has not been eliminated or attributed to a specific external cause.
+143-172 ms for full processes in one run. Even an empty native executable took
+163 ms median on that host (65 ms in process creation, 31 ms process CPU).
+Host launch/loading/scheduling cost remains; the baseline does not identify a
+specific OS/security component or justify changing security settings.
 Immediate recording is unchanged; no batching or persistent writer is introduced.
 New PSReadLine imports now preserve oldest-to-newest chronology; existing imported
 timestamps are not rewritten. These optimizations add no persistent schema change.
@@ -492,6 +524,30 @@ timestamps are not rewritten. These optimizations add no persistent schema chang
 For this upgrade, rebuild the Zig executable and use `just safe-upgrade` from a
 quiet `pwsh -NoProfile` session. The recipe publishes and replaces the predictor
 alongside the executable and hook. Restart PowerShell after deployment.
+
+### Actual terminal first-frame and I/O measurements
+
+Run `just terminal-profile` directly in Windows Terminal or WezTerm. Search and
+scroll, then cancel with Ctrl+C to print aggregate first-frame, negotiation,
+render/flush and input-to-frame timings. Input/output must not be redirected.
+The temporary report is removed afterward; no command or history text is stored.
+
+To measure the actual Ctrl+R launch path after deploying the updated hook:
+
+```powershell
+$env:ZIGSTORY_TUI_PROFILE = Join-Path $env:TEMP 'zigstory-terminal.json'
+# Press Ctrl+R, interact, then cancel.
+Get-Content -LiteralPath $env:ZIGSTORY_TUI_PROFILE -Raw | ConvertFrom-Json
+Remove-Item -LiteralPath $env:ZIGSTORY_TUI_PROFILE
+Remove-Item Env:\ZIGSTORY_TUI_PROFILE
+```
+
+The hook stamps process launch with the monotonic Windows clock only when profiling
+is enabled. Reports include actual terminal writes/flush, not physical key latency,
+clipboard setup before launch, GPU composition or when pixels become visible.
+An isolated Windows ConPTY regression exercises real console input/output and
+first-frame reporting without touching user history. It is not a measurement of
+Windows Terminal/WezTerm display composition.
 
 #### `zigstory perf`
 
@@ -574,16 +630,20 @@ zigstory --help
 
 ## 🎯 Performance Benchmarks
 
-Measured on Windows 11, AMD Ryzen 7 5800X, NVMe SSD:
+Representative local ReleaseFast measurements, not universal latency promises:
 
-| Operation | Target | Actual | Status |
-|-----------|--------|--------|--------|
-| Single command insert | <50ms | ~0ms | ✅ Exceeds |
-| Batch insert (100 commands) | <1s | ~3ms | ✅ Exceeds |
-| Search query (p95) | <5ms | <5ms | ✅ Meets |
-| TUI startup | <100ms | <100ms | ✅ Meets |
-| Memory usage (10K entries) | <50MB | <50MB | ✅ Meets |
-| PowerShell startup overhead | <10ms | ~0.022ms | ✅ Exceeds |
+| Measurement | Result |
+| --- | --- |
+| 100k rows / 25k distinct substring matches, initial median | ~32 ms |
+| Cached deep-page median | ~0.04 ms |
+| Result-string arena on that fixture | 22,412 bytes |
+| Actual 100x30 ConPTY first-frame tty render/flush | ~0.23 ms |
+| Launch-to-first-frame in that ConPTY sample | ~127 ms |
+
+ConPTY is an isolated Windows console test, not a visible terminal benchmark.
+Use `just performance` and `just terminal-profile` on your machine for current
+results. Earlier insert/startup claims did not consistently include process
+launch or terminal I/O and have been replaced with scoped measurements.
 
 ## 🗺️ Roadmap
 

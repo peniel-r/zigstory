@@ -595,12 +595,18 @@ just performance             # Synthetic 100k-row latency/memory regression gate
 
 `just prepare` requires exactly Zig 0.16.0 and Git; ordinary dependency fetching
 alone does not apply the required compatibility patch. See `docs\sqlite-patch.md`.
-`profile-tools` builds headless TUI, internal-startup and substring benchmarks.
+`profile-tools` builds headless TUI, internal-startup, empty-native-process and
+substring benchmarks. Local validation is authoritative; this project does not
+use GitHub Actions.
 Search pages cache deduplicated IDs in per-state SQLite TEMP tables; command
 strings remain page-bounded, but TEMP storage scales with matches. Destroy search
 states before their database connection. Query/filter changes must request a
 recount; paging detects committed database changes. Unicode drawing uses cell
 widths and complete graphemes, and unchanged input does not redraw.
+Search materialization uses a connection-local SQLite aggregate to select the
+ID at max(timestamp, ID), avoiding the previous window-function partition sort.
+Regression coverage compares its output against the window query across filters,
+negative timestamps, integer extremes and ties.
 
 `just safe-upgrade` uses the prebuilt CLI, publishes the Release/win-x64 predictor
 into fresh temporary staging, and upgrades executable/hook/whole predictor module
@@ -610,6 +616,14 @@ not the upgrade process. .NET SDK 8+ is required; publishing prefers Scoop's SDK
 with matching `DOTNET_ROOT`/`DOTNET_ROOT_X64`, otherwise `dotnet.exe` from PATH.
 The installed predictor path matches the hook:
 `%USERPROFILE%\Documents\PowerShell\Modules\zigstoryPredictor`.
+
+`just release <version>` builds a local Windows x64 ZIP and SHA256 sidecar in
+ignored `dist`. `just safe-upgrade-package <extracted-directory>` validates the
+bundle and uses the same backup/rollback transaction without publishing or a
+local compiler/SDK. PowerShell 7.4+ x64 is still needed for the predictor.
+`just terminal-profile` measures real console writes interactively; the .NET
+harness's `--terminal-check` exercises first-frame/query/cancel in isolated ConPTY.
+Opt-in `ZIGSTORY_TUI_PROFILE` JSON reports contain no command/history text.
 
 > **Work is NOT complete until `zig build run` succeeds without errors.**
 > If the build fails, investigate, fix, and retry before marking any task done.

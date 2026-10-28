@@ -211,18 +211,17 @@ pub fn printHelp() void {
         \\
         \\  The database uses SQLite with WAL mode for:
         \\    * Concurrent read/write operations
-        \\    * Sub-5ms query performance
+        \\    * Indexed queries and paged search results
         \\    * Full-text search
         \\
         \\===============================================================================
         \\
         \\PERFORMANCE:
         \\
-        \\  * Single command insert: <50ms
-        \\  * Batch insert (100 commands): <1s
-        \\  * Search query: <5ms
-        \\  * TUI startup: <100ms
-        \\  * Memory usage: <50MB with 10,000+ entries
+        \\  * Performance depends on history size, terminal, and process-launch overhead.
+        \\  * Run just performance for repeatable synthetic latency/memory budgets.
+        \\  * Run just terminal-profile to measure first-frame and actual tty writes.
+        \\  * Cached substring pages avoid repeated grouping and deep OFFSET scans.
         \\
         \\===============================================================================
         \\

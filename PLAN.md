@@ -1,4 +1,13 @@
-# First-pass performance and usability
+# Implementation status
+
+Updated October 28, 2026. All previously approved work is committed and pushed on
+`performance_optimizations`, through `64ddac2` (predictor-aware safe upgrades).
+The user confirmed deployment and installed smoke testing. The branch remains
+unmerged. GitHub Actions is not configured/used; local validation is the release
+gate. The final follow-up pass below has also been deployed and smoke-tested by
+the user, who approved committing and pushing it on October 28, 2026.
+
+## First-pass performance and usability
 
 - [x] Fast-forward local `main` to `zig016-migration`, preserving that branch.
 - [x] Create `performance_optimizations`; obtain user approval to commit the first pass.
@@ -96,8 +105,8 @@ discard sink, not terminal I/O, the input thread, or interactive startup latency
 CLI startup remains the largest measured cost; these are measurements, not a
 claimed before/after speedup.
 
-Installed files and the original history database remain unchanged. Upgrade executable first,
-then profile script; no predictor update is needed. Back up the entire database
+At third-pass validation, installed files and history had not been changed.
+The user subsequently upgraded successfully. Back up the entire database
 directory before upgrading because schema version 2 requires restoring that
 backup when rolling back to an older binary.
 
@@ -108,7 +117,9 @@ backup when rolling back to an older binary.
 - [x] Exercise success, preflight refusal, and rollback against isolated installs;
   document invocation and recovery, then verify `zig build run`.
 
-Added `just safe-upgrade` (no rebuild and no predictor/PATH/main-profile changes).
+Initially added `just safe-upgrade` without rebuilding or changing predictor/PATH/
+main-profile settings. Predictor publishing/replacement was subsequently added in
+`64ddac2`; PATH and the main profile remain untouched.
 Backups retain executable, hook, complete history/WAL/pending files, destination
 manifest and result log. Checks require a quiet installation and a NoProfile
 invocation chain; validation has a 30-second timeout. Failed history is preserved
@@ -122,7 +133,8 @@ Real process preflight refused an active shell as intended; Just dry-run resolve
 the new recipe correctly. `zig build run -Doptimize=ReleaseFast` succeeded.
 The updated PowerShell runner passed functional, JSON, recording and upgrade
 regressions; the existing five functional skips remain unchanged.
-No actual installation/upgrade was performed. Engram impact analysis remains
+No installation was performed by the agent; the user subsequently deployed and
+smoke-tested successfully. Engram impact analysis remains
 unavailable because the installed tool rejects the documented `impact` command.
 
 ## Logging and remaining optimizations
@@ -138,16 +150,16 @@ unavailable because the installed tool rejects the documented `impact` command.
 - [x] Add repeatable Windows CI performance gates and final regression validation.
 
 Immediate recording remains required; batching and persistent-writer architecture
-are excluded. Leave subsequent optimizations uncommitted pending review.
+are excluded.
 
 Logging validation passed: 21 core/TUI regressions, the complete PowerShell runner
 (including 12 new logging checks), predictor regressions and ReleaseFast
 `zig build run`. The user explicitly requested committing logging before the
-remaining optimization work; no installation or push is part of this step.
+remaining optimization work.
 
-Logging was committed locally as `9f4c1b2`. Subsequent optimizations remain
-uncommitted for review, including a small logging correction that preserves
-console errors/warnings when persistent logging is disabled.
+Logging was committed as `9f4c1b2`; the optimization pass as `f329806`, including
+the correction preserving console diagnostics when persistent logging is disabled.
+Both were reviewed, pushed and subsequently deployed by the user.
 
 The remaining pass implements cell-aware grapheme truncation/highlighting, bulk
 screen/row fills, visible-state redraw suppression and chronological PSReadLine
@@ -181,9 +193,9 @@ component is blamed. Broad/narrow TUI searches peaked at 237 loaded rows and a
 
 `just prepare` applies the checked-in four-file Zig 0.16 SQLite compatibility patch
 without overwriting divergent local changes. Pristine fetch/patch/ReleaseFast
-tests and repeated preparation were verified. `just performance` builds all three
-profiling tools and passes synthetic correctness/latency/memory gates. The Windows
-workflow runs preparation, regressions and budgets, but has not yet run remotely.
+tests and repeated preparation were verified. `just performance` builds profiling
+tools and runs synthetic correctness/latency/memory gates locally. The checked-in
+Windows workflow is an unused optional definition, not an active project service.
 
 Final validation passed: 26 core/TUI regressions in both Debug and ReleaseFast;
 73 functional checks (five existing skips), 14 JSON checks, 32 recording checks,
@@ -191,8 +203,8 @@ isolated safe-upgrade regressions, 13 logging checks, predictor regressions and
 synthetic performance budgets. `zig build run -Doptimize=ReleaseFast` succeeded.
 Formatting and tracked diff checks passed. Temporary investigation artifacts were
 removed. Engram synchronization was attempted, but the installed tool also rejects
-the documented `sync` command. No installed files were changed, and neither the
-logging commit nor these subsequent changes were pushed.
+the documented `sync` command. Subsequent user-approved commits and deployment
+are recorded in the current status above.
 
 ## Predictor deployment in safe-upgrade
 
@@ -205,7 +217,8 @@ logging commit nor these subsequent changes were pushed.
 - [x] Extend isolated success/failure/absence regressions, update automation docs,
   and verify the required ReleaseFast application run.
 
-No actual installation, commit or push is part of this request.
+Committed and pushed as `64ddac2`; user-confirmed safe-upgrade deployment and
+installed smoke testing are complete.
 
 Validated a real Release/win-x64 publish and clean-process predictor
 loading/registration/native SQLite. Expanded isolated regressions passed for
@@ -215,4 +228,40 @@ rollback cases, manifest recovery destinations and staging cleanup. Displaced
 modules are removed after successful validation; complete backup copies and
 failed replacement directories remain available for recovery after failure.
 `just safe-upgrade` dry-run and `zig build run -Doptimize=ReleaseFast` succeeded.
-The installed executable, profile, predictor and history were not modified.
+Only isolated fixtures were modified during agent validation.
+
+## Final follow-up pass (high to low priority)
+
+- [x] Add an empty same-compiler/native-CRT process baseline with process creation,
+  wall and CPU timings. One run measured 163 ms empty-process median against
+  143-172 ms full application medians; instrumented internal phases total ~3 ms.
+  Host launch overhead is demonstrated, not eliminated or attributed to a specific
+  security product. No security settings or persistent-writer architecture changed.
+- [x] Replace window-partition sorting with a small SQLite latest-ID aggregate.
+  Initial 100k-row/25k-distinct substring median is ~32 ms (previously ~60 ms),
+  with ~0.04 ms deep pages. Preserve exact-command grouping, directory filters,
+  max(timestamp, ID), local/external invalidation and bounded result strings.
+- [x] Add opt-in actual-TTY first-frame, negotiation, output and input-to-frame
+  timings; stamp the actual Ctrl+R launch path and provide `just terminal-profile`.
+  An isolated 100x30 ConPTY check measured ~127 ms launch-to-first-frame and
+  ~0.23 ms first-frame output; physical keys/display composition remain outside
+  scope. Terminal-specific reports can now be collected directly on either host.
+- [x] Add a local Windows x64 release ZIP/SHA256 pipeline and checksummed prebuilt
+  safe upgrades without local Zig/Git/.NET SDK requirements. Preserve all existing
+  backups, validation and rollback; hashes are integrity checks, not signatures.
+- [x] Refresh current commit/deployment status, scoped performance claims, roadmap,
+  local validation and new usage documentation. Do not treat unused Actions as
+  a merge prerequisite.
+
+The user confirmed the final safe-upgrade deployment works and approved committing
+and pushing these changes. Agent validation changed only isolated fixtures.
+
+Final local validation: 28 core/TUI regressions passed in Debug and ReleaseFast,
+including reference-window comparison for the new aggregate; the complete
+PowerShell runner, predictor suite, ConPTY check and tightened performance gates
+passed. The final substring run measured 31.80 ms initial median/33.12 ms p95,
+0.038 ms deep-page median, and a 22,412-byte result arena. The empty native-process
+baseline remained ~165 ms wall, with ~63 ms in creation and ~31 ms process CPU.
+`just release 0.0.0-performance` created a local Windows x64 ZIP and SHA256
+sidecar under ignored `dist`; package regression tests verify compiler-free
+deployment and checksum refusal against isolated installations.

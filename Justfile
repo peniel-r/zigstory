@@ -21,6 +21,18 @@ install:
 safe-upgrade:
     @pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\safe-upgrade.ps1
 
+# Upgrade from an extracted checksummed release, without Zig or a .NET SDK
+safe-upgrade-package directory:
+    @pwsh -NoProfile -File scripts\safe-upgrade.ps1 -PackageDirectory "{{directory}}"
+
+# Build and validate a local Windows x64 release ZIP and SHA256 sidecar (no hosted CI)
+release version:
+    @pwsh -NoProfile -File scripts\release.ps1 -Version "{{version}}"
+
+# Measure startup and actual terminal writes interactively; cancel the TUI to see results
+terminal-profile:
+    @pwsh -NoProfile -File scripts\terminal-profile.ps1
+
 # Fetch pinned dependencies and apply the existing Zig 0.16 SQLite compatibility patch
 prepare:
     @pwsh -NoProfile -File scripts\prepare-dependencies.ps1
@@ -28,7 +40,7 @@ prepare:
 # Run synthetic latency and bounded-memory budgets (requires Zig 0.16 and .NET 8+)
 performance: build-zig
     @zig build profile-tools -Doptimize=ReleaseFast
-    @dotnet run --project tests\predictor\PredictorRegressionTests.csproj -c Release -- --performance-check "{{justfile_directory()}}\zig-out\bin\zigstory.exe" "{{justfile_directory()}}\zig-out\bin\zigstory-tui-profile.exe" "{{justfile_directory()}}\zig-out\bin\zigstory-search-benchmark.exe"
+    @$dotnet = (Get-Command dotnet.exe).Source; $scoop = Join-Path $env:USERPROFILE 'scoop\apps\dotnet-sdk\current\dotnet.exe'; if (Test-Path -LiteralPath $scoop) { $dotnet = $scoop }; $env:DOTNET_ROOT = Split-Path $dotnet; $env:DOTNET_ROOT_X64 = $env:DOTNET_ROOT; & $dotnet run --project tests\predictor\PredictorRegressionTests.csproj -c Release -- --performance-check "{{justfile_directory()}}\zig-out\bin\zigstory.exe" "{{justfile_directory()}}\zig-out\bin\zigstory-tui-profile.exe" "{{justfile_directory()}}\zig-out\bin\zigstory-search-benchmark.exe"
 
 # Build in debug mode
 debug-zig:

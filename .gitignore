@@ -11,6 +11,7 @@ zig-pkg/
 # .NET
 bin/
 obj/
+dist/
 
 # Opencode
 .opencode/

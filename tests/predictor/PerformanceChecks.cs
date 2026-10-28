@@ -54,7 +54,7 @@ internal static class PerformanceChecks
             var result = search.RootElement;
             Require(result.GetProperty("rows").GetInt32() == 100000 &&
                 result.GetProperty("unique_matches").GetInt32() == 25000, "substring fixture/count correctness");
-            Require(result.GetProperty("initial_p95_ms").GetDouble() < 500, "substring initial p95 under 500 ms");
+            Require(result.GetProperty("initial_p95_ms").GetDouble() < 100, "substring initial p95 under 100 ms");
             Require(result.GetProperty("deep_page_p95_ms").GetDouble() < 10, "cached deep-page p95 under 10 ms");
             Require(result.GetProperty("sqlite_peak_bytes").GetInt64() is > 0 and < 64 * 1024 * 1024,
                 "SQLite fixture/cache peak under 64 MiB");

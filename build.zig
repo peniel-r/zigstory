@@ -108,6 +108,17 @@ pub fn build(b: *std.Build) void {
     });
     profile_step.dependOn(&b.addInstallArtifact(startup_profile, .{}).step);
 
+    const startup_probe = b.addExecutable(.{
+        .name = "zigstory-startup-probe",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/startup_probe.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    profile_step.dependOn(&b.addInstallArtifact(startup_probe, .{}).step);
+
     const search_benchmark = b.addExecutable(.{
         .name = "zigstory-search-benchmark",
         .root_module = b.createModule(.{

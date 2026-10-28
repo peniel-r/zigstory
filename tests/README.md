@@ -9,7 +9,7 @@ tests run separately.
 | Tool | Minimum Version |
 |------|----------------|
 | Zig | 0.16.0 |
-| PowerShell | 7.0 |
+| PowerShell | 7.4 (predictor upgrade validation requires .NET 8+) |
 | .NET SDK | 8.0 |
 | sqlite3 (optional) | any | ← enables T20 DB-introspection tests |
 
@@ -140,7 +140,7 @@ The recipe builds ReleaseFast CLI/profile tools and runs temporary synthetic
 | Loaded TUI rows / result-arena capacity | <= 237 / < 1 MiB |
 | Second-half result-arena peak | <= first-half peak |
 | Sampled TUI process working set | < 128 MiB |
-| Broad substring initial / deep-page p95 | < 500 / 10 ms |
+| Broad substring initial / deep-page p95 | < 100 / 10 ms |
 | SQLite synthetic fixture/cache memory peak | < 64 MiB |
 
 `zigstory-search-benchmark` checks 25,000 distinct matches across 100,000 rows,
@@ -149,10 +149,34 @@ Result-string arenas are bounded independently of SQLite TEMP ID storage.
 Budgets use warm OS caches and generous regression thresholds, not universal
 latency promises. Process-memory sampling may miss transient peaks.
 
-`.github\workflows\performance.yml` prepares pinned dependencies, runs Debug and
-ReleaseFast Zig regressions, `zig build run`, PowerShell/predictor regressions,
-and these budgets on Windows. Local equivalents have been exercised; the newly
-added hosted workflow still needs its first GitHub run after publication.
+The project does not use GitHub Actions. `.github\workflows\performance.yml` is an
+unused optional definition, not an active validation service or merge prerequisite.
+Run the documented checks locally. The profiler now includes an empty native
+executable's process-creation/wall/CPU times to distinguish host startup overhead.
+
+## Terminal and release checks
+
+```powershell
+# Actual Windows console I/O in an isolated 100x30 ConPTY:
+dotnet run --project tests\predictor\PredictorRegressionTests.csproj -c Release -- --terminal-check "$PWD\zig-out\bin\zigstory.exe"
+
+# Interactive measurement in the real current terminal:
+just terminal-profile
+```
+
+ConPTY checks launch the actual CLI with private history, verify first-frame
+timings and real output, type a query, and cancel without selecting a command.
+An attached helper opens read/write console handles explicitly so a redirected
+test runner's handles cannot leak into the TUI. Reports contain aggregate timings
+only. This covers the Windows console path, not display composition or physical
+key latency in Windows Terminal/WezTerm. The interactive recipe rejects redirected
+I/O and removes its temporary report on exit.
+
+Upgrade regressions also build/extract a real ZIP with a per-file manifest and
+SHA256 sidecar, deploy it while publishing is deliberately forbidden, and verify
+corrupt bundles fail before installation. `just release <version>` exercises the
+complete local dependency/build/publish/package pipeline; outputs go to ignored
+`dist`. No hosted workflow, installed files or public GitHub release is involved.
 
 | ID | Area | What is tested |
 |----|------|----------------|

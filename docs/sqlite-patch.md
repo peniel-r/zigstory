@@ -23,7 +23,8 @@ patched package is accepted using a reverse check. Divergent sources are rejecte
 without overwriting local edits. It requires exactly Zig 0.16.0; newer compiler
 versions need separate compatibility validation.
 
-Windows CI uses this same preparation step. A pristine fetch plus patch has
+Local builds use this preparation step; GitHub Actions is not used by this project.
+A pristine fetch plus patch has
 also been verified locally with the ReleaseFast core/TUI regressions.
 
 ## Scope and rationale

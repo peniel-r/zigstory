@@ -3,6 +3,32 @@ const sqlite = @import("sqlite");
 const scrolling = @import("scrolling.zig");
 const directory_filter = @import("directory_filter.zig");
 
+const Latest = extern struct { timestamp: i64, id: i64, initialized: bool };
+
+fn latestStep(context: ?*sqlite.c.sqlite3_context, _: c_int, args: [*c]?*sqlite.c.sqlite3_value) callconv(.c) void {
+    const memory = sqlite.c.sqlite3_aggregate_context(context, @sizeOf(Latest)) orelse {
+        sqlite.c.sqlite3_result_error_nomem(context);
+        return;
+    };
+    const latest: *Latest = @ptrCast(@alignCast(memory));
+    const id = sqlite.c.sqlite3_value_int64(args[0]);
+    const timestamp = sqlite.c.sqlite3_value_int64(args[1]);
+    if (!latest.initialized or timestamp > latest.timestamp or
+        (timestamp == latest.timestamp and id > latest.id))
+    {
+        latest.* = .{ .timestamp = timestamp, .id = id, .initialized = true };
+    }
+}
+
+fn latestFinal(context: ?*sqlite.c.sqlite3_context) callconv(.c) void {
+    if (sqlite.c.sqlite3_aggregate_context(context, 0)) |memory| {
+        const latest: *Latest = @ptrCast(@alignCast(memory));
+        sqlite.c.sqlite3_result_int64(context, latest.id);
+    } else {
+        sqlite.c.sqlite3_result_null(context);
+    }
+}
+
 pub const SearchState = struct {
     query: std.ArrayListUnmanaged(u8) = .empty,
     results: []scrolling.HistoryEntry = &.{},
@@ -100,6 +126,9 @@ pub const SearchState = struct {
         const allocator = self.results_arena.child_allocator;
         if (self.cache_db != db) self.dropCache(allocator);
         if (self.cache_table == null) {
+            // Return the ID at max(timestamp, id) without window-function sorting.
+            if (sqlite.c.sqlite3_create_function_v2(db.db, "zigstory_latest_id", 2, sqlite.c.SQLITE_UTF8 | sqlite.c.SQLITE_DETERMINISTIC, null, null, latestStep, latestFinal, null) != sqlite.c.SQLITE_OK)
+                return error.SearchAggregateRegistrationFailed;
             const table = try std.fmt.allocPrintSentinel(allocator, "zigstory_search_{x}", .{@intFromPtr(self)}, 0);
             errdefer allocator.free(table);
             const ddl = try std.fmt.allocPrintSentinel(allocator, "CREATE TEMP TABLE {s}(position INTEGER PRIMARY KEY, history_id INTEGER NOT NULL)", .{table}, 0);
@@ -122,9 +151,8 @@ pub const SearchState = struct {
             // Materialize only IDs once, not command strings on every page. The
             // integer primary key supports indexed absolute paging without OFFSET.
             const sql = try std.fmt.allocPrintSentinel(allocator, "INSERT INTO temp.{s}(history_id) " ++
-                "SELECT id FROM (SELECT id,timestamp,ROW_NUMBER() OVER " ++
-                "(PARTITION BY cmd ORDER BY timestamp DESC,id DESC) AS newest FROM history" ++ where ++
-                ") WHERE newest=1 ORDER BY timestamp DESC,id DESC", .{self.cache_table.?}, 0);
+                "SELECT zigstory_latest_id(id,timestamp) AS latest_id FROM history" ++ where ++
+                " GROUP BY cmd ORDER BY MAX(timestamp) DESC,latest_id DESC", .{self.cache_table.?}, 0);
             defer allocator.free(sql);
             var insert = try db.prepareDynamic(sql);
             defer insert.deinit();

@@ -27,6 +27,8 @@ internal static class HistoryProfiler
             RunProcess(executable, cliArgs, home);
             var startup = Measure(21, () => RunProcess(executable, cliArgs, home));
             var helpStartup = Measure(21, () => RunProcess(executable, ["help"], home));
+            var probe = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(tuiProfiler))!, "zigstory-startup-probe.exe");
+            var probeSamples = Enumerable.Range(0, 21).Select(_ => RunProcess(probe, [], home)).ToArray();
             var phaseProfiler = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(tuiProfiler))!, "zigstory-startup-profile.exe");
             var phaseSamples = new List<Dictionary<string, double>>();
             for (var i = 0; i < 21; i++)
@@ -86,6 +88,12 @@ internal static class HistoryProfiler
                 prefix_count = prefixes.Count,
                 cli_startup_and_empty_perf = Summary(startup),
                 cli_process_and_help = Summary(helpStartup),
+                empty_native_process = new
+                {
+                    launch = Summary(probeSamples.Select(sample => sample.LaunchMs).ToList()),
+                    wall = Summary(probeSamples.Select(sample => sample.WallMs).ToList()),
+                    cpu = Summary(probeSamples.Select(sample => sample.CpuMs).ToList()),
+                },
                 startup_phases = phaseSummaries,
                 prediction_connection_cold = Summary(coldTimes),
                 prediction_cached = Summary(cachedTimes),
@@ -115,7 +123,7 @@ internal static class HistoryProfiler
         return connection;
     }
 
-    private static (string Output, long? PeakWorkingSet) RunProcess(
+    private static (string Output, long? PeakWorkingSet, double LaunchMs, double WallMs, double CpuMs) RunProcess(
         string exe, string[] arguments, string home, bool sampleWorkingSet = false)
     {
         using var process = new Process();
@@ -129,7 +137,9 @@ internal static class HistoryProfiler
         process.StartInfo.Environment["USERPROFILE"] = home;
         process.StartInfo.Environment["HOME"] = home;
         foreach (var argument in arguments) process.StartInfo.ArgumentList.Add(argument);
+        var lifetime = Stopwatch.StartNew();
         if (!process.Start()) throw new InvalidOperationException("Could not start profiling process.");
+        var launchMs = lifetime.Elapsed.TotalMilliseconds;
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();
         long? peakWorkingSet = null;
@@ -154,7 +164,8 @@ internal static class HistoryProfiler
         }
         var stderr = error.GetAwaiter().GetResult();
         if (process.ExitCode != 0) throw new InvalidOperationException($"Profiling process failed ({process.ExitCode}): {stderr}");
-        return (output.GetAwaiter().GetResult(), peakWorkingSet);
+        return (output.GetAwaiter().GetResult(), peakWorkingSet, launchMs,
+            lifetime.Elapsed.TotalMilliseconds, process.TotalProcessorTime.TotalMilliseconds);
     }
 
     private static List<double> Measure(int count, Action action)
