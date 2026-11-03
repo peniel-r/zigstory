@@ -37,7 +37,7 @@
 | **PowerShell import** | Bootstraps the DB from an existing PSReadline history file |
 | **JSON batch import** | Bulk imports structured history from a JSON file (used by PS hooks) |
 | **Stats & perf** | Aggregated usage statistics and per-directory performance metrics |
-| **Clipboard** | Selected command is automatically copied to the Windows clipboard |
+| **Clipboard** | Standalone `search`/`fzf` copy the selection; Ctrl+R/Ctrl+F use a private `--output` file instead |
 
 ---
 
@@ -151,9 +151,9 @@ zigstory search
        │    ├─ Text input  →  SearchState.performSearch (LIKE query)
        │    ├─ Ctrl+F      →  directory_filter.toggleMode
        │    ├─ Ctrl+U      →  clear search query
-       │    ├─ j/k / ↑↓    →  navigation.NavigationState.handleKey
+       │    ├─ ↑↓ / Ctrl+P/N →  navigation.NavigationState.handleKey (letters always edit the query)
        │    ├─ Shift+Space →  multi-select (max 5, piped on Enter)
-       │    └─ Enter       →  select command → clipboard.copyToClipboard
+       │    └─ Enter       →  select command → --output file (Ctrl+R/Ctrl+F) or clipboard (standalone)
        └─ draw  →  render.{fillScreen, renderTitleBar, renderStatusBar,
                            renderEntry, renderHelpBar}
 ```
@@ -260,9 +260,9 @@ zigstory search
 | Key | Action |
 |---|---|
 | Type text | Live fuzzy search (LIKE `%query%`) |
-| `↑` / `k` | Move selection up |
-| `↓` / `j` | Move selection down |
-| `Enter` | Select command + copy to clipboard |
+| `↑` / `Ctrl+P` | Move selection up |
+| `↓` / `Ctrl+N` | Move selection down |
+| `Enter` | Select command (written to `--output`, else printed + copied to clipboard) |
 | `Shift+Space` | Toggle multi-select (max 5; Enter pipes them) |
 | `Ctrl+F` | Toggle directory filter (global ↔ current dir) |
 | `Ctrl+U` | Clear search query |
@@ -488,7 +488,7 @@ try commit.exec(.{}, .{});
 PowerShell 7+ (PS Core) is the **primary host shell**. The project:
 - Reads PSReadline's `ConsoleHost_history.txt` for bulk import
 - Expects a `$PROFILE` hook to call `zigstory add` on `PSReadLine`'s `CommandValidateHandler` or similar
-- Copies the selected command to the Windows clipboard so PS can paste it directly
+- Ctrl+R/Ctrl+F pass `--output <temp file>` and insert the selection at the prompt, leaving the clipboard untouched
 
 ### Setting Up the PS Profile Hook
 

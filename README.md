@@ -31,9 +31,9 @@
 - **Built-in TUI** with real-time substring search (uses LIKE queries for reliability)
 - **Virtual scrolling** handles massive histories efficiently
 - **Multi-select** commands for piped execution (up to 5 commands)
-- **Vim-style keybindings** (j/k for navigation, Ctrl+K/J for page navigation)
+- **Keyboard navigation** (↑/↓ or Ctrl+P/Ctrl+N, Ctrl+K/J for page navigation)
 - **fzf integration** for users who prefer external tools
-- **Clipboard integration** - selected commands auto-copy
+- **Prompt insertion** - Ctrl+R/Ctrl+F insert the selection without touching the clipboard
 - **Search highlighting** - matched terms highlighted in results
 
 ### 📊 **Rich Context Tracking**
@@ -353,13 +353,20 @@ Launch the interactive TUI search interface.
 - Unicode-aware backspace removes complete graphemes, including combined emoji
 - Colons within search queries remain literal, so Windows paths are searchable
 - Multi-select support (up to 5 commands)
-- Keyboard navigation (↑/↓, Page Up/Down, Ctrl+K/J)
-- Selected command copied to clipboard
+- Keyboard navigation (↑/↓ or Ctrl+P/Ctrl+N, Page Up/Down, Ctrl+K/J)
+- Selected command copied to clipboard when run directly
 - Indexed timestamp ordering for recent-history browsing
+
+**Options:**
+
+- `-o, --output <PATH>` - Write the selected command to this file instead of
+  printing and copying it. The file is left empty when the search is cancelled.
+  The Ctrl+R and Ctrl+F integrations use a private temporary file this way, so the
+  clipboard and its history are never touched.
 
 **Keybindings:**
 
-- Type to filter results in real-time (case-insensitive)
+- Type to filter results in real-time (case-insensitive); letters always edit the query
 - `:q` enters quit-command mode only when the search query is empty
 
 ### ⌨️ Keyboard Shortcuts
@@ -368,17 +375,18 @@ Launch the interactive TUI search interface.
 |-----|--------|
 | **F2** | **Toggle predictive IntelliSense on/off** (Ghost text/ListView) |
 | **Right Arrow** | Accept current prediction suggestion |
-| **Ctrl+F** (in terminal) | Cycle through predictions (if multiple) |
+| **Ctrl+F** (in terminal) | Open fzf search (requires fzf) |
 | **Ctrl+R** | Open Interactive TUI search |
 | **Ctrl+F** (in TUI) | Toggle global/current-directory filtering |
-| **j/k** or **↑/↓** (in TUI)| Navigate search results |
-| **Enter** (in TUI) | Accept selection and copy to clipboard |
+| **↑/↓** or **Ctrl+P/Ctrl+N** (in TUI)| Navigate search results |
+| **Enter** (in TUI) | Accept selection (Ctrl+R inserts it at the prompt) |
 | **Ctrl+C** (in TUI) | Close search without selection |
 | **Esc** (in TUI) | Clear query; close when the query is empty |
 
 #### `zigstory fzf`
 
-Launch fzf-based search (requires fzf installed).
+Launch fzf-based search (requires fzf installed). Accepts the same
+`-o, --output <PATH>` option as `search`.
 
 ```powershell
 zigstory fzf
@@ -398,10 +406,19 @@ zigstory import --file "C:\history.json"
 
 **Features:**
 
-- Duplicate detection for PSReadLine history
+- Safe to run again: PSReadLine history is reconciled with what is already stored
+- Multi-line commands are rebuilt the way PSReadLine reads its own file
 - Progress tracking during import
 - Handles large history files (10,000+ commands)
 - Estimates timestamps for PSReadLine history; JSON batches can supply execution time
+
+PSReadLine's file has no timestamps, so its entries are matched by command text:
+when history already holds N copies of a command, from an earlier import or from
+live recording, the first N occurrences in the file count as already imported.
+Repeating an import therefore adds nothing, while commands from sessions that were
+not recorded (for example Windows PowerShell 5.1, which shares the file) are still
+added. Duplicates created by earlier versions are not removed. Lines ending in a
+backtick continue on the next line, as in PSReadLine.
 
 Single-command recording and both import paths update history, command statistics,
 and new-entry ranks in one transaction. JSON imports require a nonempty `cmd`;
@@ -472,6 +489,12 @@ PowerShell/compound/dynamic failures use status 1 when an exact native code cann
 be identified. A stale `$LASTEXITCODE` is never assigned to a successful cmdlet.
 Without PSReadLine, directory capture falls back to the preceding prompt's
 directory; noninteractive commands without a subsequent prompt are not recorded.
+
+Commands that PSReadLine keeps out of its own history file are not recorded either.
+By default that covers lines that look like they contain secrets (for example
+`password`, `token`, `apikey`, or `secret`), and it respects any custom
+`AddToHistoryHandler` installed before `zsprofile.ps1` is loaded: returning
+`MemoryOnly` or `$false` keeps a command out of zigstory as well.
 
 ### Local performance profiling
 
@@ -572,7 +595,7 @@ zigstory list 20
 
 #### `zigstory stats`
 
-Display usage statistics and insights with ASCII visualizations.
+Display usage statistics and insights with text bar charts.
 
 ```powershell
 zigstory stats
@@ -583,8 +606,13 @@ zigstory stats
 - **Overview**: Total commands, unique commands, history span
 - **Top Commands**: Most used commands ranked by frequency with last used time
 - **Success Rate**: Percentage of commands that succeeded (exit_code = 0)
-- **Activity**: Hourly usage distribution (ASCII bar chart)
+- **Activity**: Usage by local hour of day (bar chart)
 - **Directories**: Top 5 working directories by command count
+
+`stats` and `list` write UTF-8 to stdout, so they can be piped or redirected. On a
+console, they switch it to UTF-8 while printing and restore the previous code page,
+so bars and non-ASCII commands display correctly. `perf --format json` escapes
+non-ASCII characters, so it parses correctly whatever encoding the reader assumes.
 
 #### `zigstory recalc-rank`
 

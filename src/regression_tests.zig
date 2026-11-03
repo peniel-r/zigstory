@@ -4,6 +4,8 @@ const zigstory = @import("zigstory");
 const add = @import("cli/add.zig");
 const import_history = @import("cli/import.zig");
 const recalc = @import("cli/recalc.zig");
+const selection = @import("cli/selection.zig");
+const output = @import("cli/output.zig");
 
 const allocator = std.testing.allocator;
 const io = std.testing.io;
@@ -26,6 +28,134 @@ test "PSReadLine imports assign increasing timestamps in file order" {
     try std.testing.expectEqual(@as(i64, 60), parsed.entries[1].timestamp - parsed.entries[0].timestamp);
     try std.testing.expectEqual(@as(i64, 60), parsed.entries[2].timestamp - parsed.entries[1].timestamp);
     try std.testing.expect(@abs(parsed.entries[2].timestamp - std.Io.Timestamp.now(io, .real).toSeconds()) < 2);
+}
+
+test "PSReadLine imports rebuild multi-line entries the way PSReadLine reads them" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    // UTF-8 BOM, CRLF endings, an indented three-line entry, an inner escaped quote,
+    // and a final unterminated continuation (which PSReadLine itself skips).
+    try tmp.dir.writeFile(io, .{ .sub_path = "history.txt", .data = "\xEF\xBB\xBFgit status\r\n" ++
+        "foreach ($x in 1..3) {`\r\n  $x`\r\n}\r\n" ++
+        "Write-Host `\"quoted`\"\r\n" ++
+        "first`\r\n\r\n" ++
+        "incomplete`\r\n" });
+    const file = try tmp.dir.openFile(io, "history.txt", .{});
+    defer file.close(io);
+    const parsed = try import_history.parseHistoryFile(allocator, io, file);
+    defer {
+        for (parsed.entries) |entry| allocator.free(entry.cmd);
+        allocator.free(parsed.entries);
+    }
+    const expected = [_][]const u8{
+        "git status",
+        "foreach ($x in 1..3) {\n  $x\n}",
+        "Write-Host `\"quoted`\"",
+        "first",
+    };
+    try std.testing.expectEqual(expected.len, parsed.count);
+    for (expected, parsed.entries) |want, entry| try std.testing.expectEqualStrings(want, entry.cmd);
+}
+
+test "re-importing PSReadLine history is idempotent and skips commands already recorded live" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "history.txt", .data = "git status\necho one\ngit status\nGit Status\n" });
+    const path = try tmp.dir.realPathFileAlloc(io, "history.txt", allocator);
+    defer allocator.free(path);
+    var db = try zigstory.db.initDb(":memory:");
+    defer db.deinit();
+    // The shell hook already recorded one execution that PSReadLine also saved.
+    try add.addCommand(&db, .{ .cmd = "git status", .cwd = "C:\\repo", .exit_code = 0, .duration_ms = 0 }, allocator, io);
+
+    const first = try import_history.importHistoryFile(&db, path, "C:\\repo", allocator, io, false);
+    try std.testing.expectEqual(@as(usize, 4), first.total);
+    try std.testing.expectEqual(@as(usize, 3), first.imported);
+    try std.testing.expectEqual(@as(usize, 1), first.skipped);
+
+    const second = try import_history.importHistoryFile(&db, path, "C:\\repo", allocator, io, false);
+    try std.testing.expectEqual(@as(usize, 0), second.imported);
+    try std.testing.expectEqual(@as(usize, 4), second.skipped);
+
+    // Later entries, such as commands from sessions without the hook, still import once.
+    try tmp.dir.writeFile(io, .{ .sub_path = "history.txt", .data = "git status\necho one\ngit status\nGit Status\necho one\n" });
+    const third = try import_history.importHistoryFile(&db, path, "C:\\repo", allocator, io, false);
+    try std.testing.expectEqual(@as(usize, 1), third.imported);
+    try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "SELECT COUNT(*) FROM history WHERE cmd = 'git status'"));
+    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT COUNT(*) FROM history WHERE cmd = 'Git Status'"));
+    try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "SELECT COUNT(*) FROM history WHERE cmd = 'echo one'"));
+    try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "SELECT frequency FROM command_stats WHERE cmd = 'echo one'"));
+}
+
+test "PSReadLine reconciliation counts use the command index" {
+    var db = try zigstory.db.initDb(":memory:");
+    defer db.deinit();
+    var stmt = try db.prepareDynamic("EXPLAIN QUERY PLAN " ++ import_history.existing_count_sql);
+    defer stmt.deinit();
+    var rows = try stmt.iterator(struct { id: i64, parent: i64, unused: i64, detail: []const u8 }, .{ @as([]const u8, "git status"), @as([]const u8, "git status") });
+    var found = false;
+    while (try rows.nextAlloc(allocator, .{})) |row| {
+        defer allocator.free(row.detail);
+        found = found or std.mem.indexOf(u8, row.detail, "idx_cmd_prefix") != null;
+    }
+    try std.testing.expect(found);
+}
+
+const TestArgs = struct {
+    args: []const []const u8,
+    index: usize = 0,
+
+    pub fn next(self: *TestArgs) ?[]const u8 {
+        if (self.index == self.args.len) return null;
+        defer self.index += 1;
+        return self.args[self.index];
+    }
+};
+
+test "interactive commands accept an output file and reject unknown options" {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var with_output = TestArgs{ .args = &.{ "--output", "C:\\Users\\A User\\out file.tmp" } };
+    try std.testing.expectEqualStrings("C:\\Users\\A User\\out file.tmp", (try zigstory.cli.parseSelection(arena.allocator(), &with_output)).output.?);
+    var short = TestArgs{ .args = &.{ "-o", "out.tmp" } };
+    try std.testing.expectEqualStrings("out.tmp", (try zigstory.cli.parseSelection(arena.allocator(), &short)).output.?);
+    var none = TestArgs{ .args = &.{} };
+    try std.testing.expect((try zigstory.cli.parseSelection(arena.allocator(), &none)).output == null);
+    var missing = TestArgs{ .args = &.{"--output"} };
+    try std.testing.expectError(error.MissingArgValue, zigstory.cli.parseSelection(arena.allocator(), &missing));
+    var unknown = TestArgs{ .args = &.{"--clipboard"} };
+    try std.testing.expectError(error.UnknownSelectionOption, zigstory.cli.parseSelection(arena.allocator(), &unknown));
+}
+
+test "selection files hold the exact command and are emptied on cancel" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "selection.tmp", .data = "stale selection" });
+    const path = try tmp.dir.realPathFileAlloc(io, "selection.tmp", allocator);
+    defer allocator.free(path);
+    var buffer: [128]u8 = undefined;
+    const command = "git commit -m \"multi\nline\" \u{e9}\u{1f680}";
+    try selection.writeOutput(io, path, command);
+    try std.testing.expectEqualStrings(command, try tmp.dir.readFile(io, "selection.tmp", &buffer));
+    try selection.writeOutput(io, path, null);
+    try std.testing.expectEqual(@as(usize, 0), (try tmp.dir.readFile(io, "selection.tmp", &buffer)).len);
+}
+
+test "report truncation keeps whole UTF-8 sequences and only the first line" {
+    try std.testing.expectEqualStrings("short", output.displayPrefix("short", 10).text);
+    try std.testing.expect(!output.displayPrefix("short", 10).truncated);
+    // U+00E9 is two bytes; cutting after its first byte must back off to a boundary.
+    const cut = output.displayPrefix("ab\u{e9}cd", 3);
+    try std.testing.expectEqualStrings("ab", cut.text);
+    try std.testing.expect(cut.truncated);
+    const multi = output.displayPrefix("first line\nsecond", 40);
+    try std.testing.expectEqualStrings("first line", multi.text);
+    try std.testing.expect(multi.truncated);
+    var buffer: [10]u8 = undefined;
+    try std.testing.expectEqualStrings("fits", output.ellipsize(&buffer, "fits", buffer.len));
+    try std.testing.expectEqualStrings("abcdefg...", output.ellipsize(&buffer, "abcdefghijklmnop", buffer.len));
+    try std.testing.expectEqualStrings("\u{4e2d}\u{4e2d}...", output.ellipsize(&buffer, "\u{4e2d}\u{4e2d}\u{4e2d}\u{4e2d}", buffer.len));
+    try std.testing.expectEqualStrings("first...", output.ellipsize(&buffer, "first\nsecond", buffer.len));
 }
 
 fn scalar(db: *sqlite.Db, comptime sql: []const u8) !i64 {

@@ -2,11 +2,11 @@ const std = @import("std");
 
 pub const Action = union(enum) {
     add: AddParams,
-    search: void,
+    search: SelectionParams,
     import: ImportParams,
     stats: void,
     list: ListParams,
-    fzf: void,
+    fzf: SelectionParams,
     recalc_rank: void,
     maintenance: void,
     perf: PerfParams,
@@ -18,6 +18,12 @@ pub const AddParams = struct {
     cwd: []const u8,
     exit_code: i32,
     duration: i64,
+};
+
+/// Options for the interactive `search` and `fzf` commands.
+pub const SelectionParams = struct {
+    /// Shell integrations receive the selection in this file instead of the clipboard.
+    output: ?[]const u8 = null,
 };
 
 pub const ListParams = struct {
@@ -49,7 +55,7 @@ pub fn parse(allocator: std.mem.Allocator, process_args: std.process.Args) !Acti
     if (std.mem.eql(u8, command, "add")) {
         return parseAdd(allocator, &iter);
     } else if (std.mem.eql(u8, command, "search")) {
-        return .search;
+        return .{ .search = try parseSelection(allocator, &iter) };
     } else if (std.mem.eql(u8, command, "import")) {
         return parseImport(allocator, &iter);
     } else if (std.mem.eql(u8, command, "stats")) {
@@ -57,7 +63,7 @@ pub fn parse(allocator: std.mem.Allocator, process_args: std.process.Args) !Acti
     } else if (std.mem.eql(u8, command, "list")) {
         return parseList(allocator, &iter);
     } else if (std.mem.eql(u8, command, "fzf")) {
-        return .fzf;
+        return .{ .fzf = try parseSelection(allocator, &iter) };
     } else if (std.mem.eql(u8, command, "recalc-rank")) {
         return .recalc_rank;
     } else if (std.mem.eql(u8, command, "maintenance")) {
@@ -103,6 +109,19 @@ fn parseAdd(allocator: std.mem.Allocator, iter: *std.process.Args.Iterator) !Act
             .duration = duration,
         },
     };
+}
+
+/// Parse `search`/`fzf` options from any iterator whose `next()` returns argument slices.
+pub fn parseSelection(allocator: std.mem.Allocator, iter: anytype) !SelectionParams {
+    var params: SelectionParams = .{};
+    while (iter.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--output") or std.mem.eql(u8, arg, "-o")) {
+            params.output = try allocator.dupe(u8, iter.next() orelse return error.MissingArgValue);
+        } else {
+            return error.UnknownSelectionOption;
+        }
+    }
+    return params;
 }
 
 fn parseList(_: std.mem.Allocator, iter: *std.process.Args.Iterator) !Action {

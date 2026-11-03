@@ -265,3 +265,71 @@ baseline remained ~165 ms wall, with ~63 ms in creation and ~31 ms process CPU.
 `just release 0.0.0-performance` created a local Windows x64 ZIP and SHA256
 sidecar under ignored `dist`; package regression tests verify compiler-free
 deployment and checksum refusal against isolated installations.
+
+## Review bug-fix pass (October 29, 2026)
+
+Fixes for defects found in the October 29 review, in priority order. No commit
+without review; `zig build run` must succeed. The machine's `zig` is now 0.17.0,
+which cannot build this project; validation uses an official, checksum-verified
+Zig 0.16.0 placed outside the repository and the user's PATH.
+
+- [x] Privacy: do not record commands PSReadLine keeps out of its history file
+  (sensitive `MemoryOnly` lines, or `SkipAdding` from a user handler).
+- [x] Ctrl+R/Ctrl+F: return selections through a private temporary file
+  (`--output`) instead of the clipboard; standalone `search`/`fzf` keep copying.
+- [x] PSReadLine import: reconcile occurrence counts so re-imports are idempotent
+  and commands already recorded live are not duplicated.
+- [x] PSReadLine import: rebuild backtick-continued multi-line entries the way
+  PSReadLine reads its own file; ignore a UTF-8 BOM.
+- [x] `stats`: local-time hourly chart, UTF-8 bars that render on any console code
+  page, stdout output. `list` also writes to stdout.
+- [x] JSON output escapes non-ASCII so it decodes correctly on non-UTF-8 consoles.
+- [x] Small fixes: unreachable j/k navigation (remove dead branch, correct docs),
+  status-bar buffer aliasing, unused `perf` truncation, predictor `Dispose()`
+  leaving the database open, leftover `recalc-rank` debug output.
+- [x] Regression coverage for each fix; full validation and `zig build run`.
+
+Deferred: rank decay (ranks are fixed at insert time) is addressed by the planned
+schema change (time-invariant decay score), not by a local fix. Duplicates created
+by earlier re-imports are not removed automatically.
+
+Baseline before changes (Zig 0.16.0): 28 Zig regressions, 73 functional checks
+(five skips), recording/logging/upgrade suites and predictor regressions passed.
+The JSON suite failed only in non-interactive shells whose console code page is
+437, because PowerShell decoded the CLI's UTF-8 JSON with that code page; the
+same happens to users with default consoles, so JSON output now escapes
+non-ASCII instead of the test being changed.
+
+Red/green evidence: before the fixes, a sandboxed second PSReadLine import added
+every command again and split a three-line `foreach` into three entries; the new
+predictor disposal test failed with driver pooling enabled; and the new ConPTY
+report check failed against the previously installed binary on code page 437.
+`zig fmt --check` flags only `fzf.zig`, `clipboard.zig`, `write.zig` and
+`directory_filter.zig`, which are untouched CRLF working copies.
+
+Final validation (Zig 0.16.0): 35 core/TUI regressions passed in Debug and
+ReleaseFast (seven new); the complete PowerShell runner passed with 0 failures,
+including 73 functional checks (the same five skips), 20 JSON/CLI-output checks,
+43 recording checks, and the upgrade and logging suites; 25 predictor checks and
+four ConPTY scenarios (first frame/cancel, Enter to `--output`, and UTF-8 reports
+restoring code pages 437 and 65001) passed. `just performance` budgets passed:
+substring initial median 32.44 ms (p95 34.47 ms), deep page 0.038 ms, headless
+frame p95 1.98 ms, 22,412-byte result arena. `zig build run -Doptimize=ReleaseFast`
+succeeded. The user deployed with safe-upgrade on November 3 and confirmed
+Ctrl+R and predictions work, then approved committing this pass.
+
+## Approved follow-up sequence (November 3, 2026)
+
+Keep `performance_optimizations` unmerged. Do not install changes automatically
+or commit new implementation passes without review.
+
+1. Commit the deployed and reviewed bug fixes.
+2. Quick performance wins and cleanup: remove redundant module discovery,
+   reduce predictor publishing dependencies, measure/handle cold prediction,
+   remove verified unused code, consolidate database opening, correct docs and
+   formatting; validate each change against local regressions/performance gates.
+3. Prompt fix: move process launch off the prompt path while retaining immediate
+   per-event payloads and asynchronous imports (no batching or persistent writer).
+4. Schema change: prototype distinct-command storage, substring indexing and
+   time-invariant decay; verify migration, rollback/version compatibility,
+   directory-scoped semantics and query performance before changing production SQL.

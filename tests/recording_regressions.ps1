@@ -146,6 +146,7 @@ try {
     $installedHandler = (Get-PSReadLineOption).AddToHistoryHandler
     Assert-True (-not $installedHandler.Invoke('Set-Location C:\elsewhere')) 'Directory capture preserves a pre-existing history filtering handler'
     Assert-True ($Global:ZigstoryAcceptedCommand.Directory -ceq $PWD.ProviderPath) 'Directory capture happens before execution changes location'
+    Assert-True ($Global:ZigstoryAcceptedCommand.HistoryOption -eq 'SkipAdding') 'History capture records the pre-existing handler decision'
     Initialize-ZigstoryHistoryCapture
     Assert-True ([object]::ReferenceEquals($installedHandler, (Get-PSReadLineOption).AddToHistoryHandler)) 'Reinitialization does not recursively wrap the history handler'
 
@@ -175,6 +176,58 @@ try {
     Write-Error 'expected test error' -ErrorAction Continue 2>$null
     $null = Prompt
     Assert-True ($script:captured.exit_code -eq 1) 'Prompt preserves failed PowerShell status despite a stale LASTEXITCODE'
+
+    # PSReadLine's own history decision controls recording.
+    Set-PSReadLineOption -AddToHistoryHandler $originalHandler
+    $Global:ZigstoryHistoryCaptureInstalled = $false
+    Initialize-ZigstoryHistoryCapture
+    $capture = (Get-PSReadLineOption).AddToHistoryHandler
+    $secretLine = '$token = ''abc123'''
+    $null = $capture.Invoke($secretLine)
+    Assert-True ($Global:ZigstoryAcceptedCommand.HistoryOption -eq 'MemoryOnly') 'History capture keeps PSReadLine sensitive-line decisions'
+    $script:captured = $null
+    $Global:ZigstoryLastHistoryId = -1
+    $script:testHistory.CommandLine = $secretLine
+    $null = Prompt
+    Assert-True ($null -eq $script:captured) 'Commands PSReadLine keeps out of its history file are not recorded'
+    $null = $capture.Invoke('git status')
+    $Global:ZigstoryLastHistoryId = -1
+    $script:testHistory.CommandLine = 'git status'
+    $null = Prompt
+    Assert-True ($script:captured.cmd -ceq 'git status') 'Ordinary accepted commands are still recorded'
+    $Global:ZigstoryAcceptedCommand = $null
+    $Global:ZigstoryLastHistoryId = -1
+    $script:captured = $null
+    $script:testHistory.CommandLine = '$apikey = 42'
+    $null = Prompt
+    Assert-True ($null -eq $script:captured) 'Commands without an acceptance decision get the PSReadLine sensitive-data check'
+    Assert-True ((Get-ZigstoryHistoryOption $false) -eq 'SkipAdding' -and
+        (Get-ZigstoryHistoryOption 'memoryonly') -eq 'MemoryOnly' -and
+        (Get-ZigstoryHistoryOption 1) -eq 'MemoryOnly' -and
+        (Get-ZigstoryHistoryOption @(1, 2)) -eq 'MemoryAndFile' -and
+        (Get-ZigstoryHistoryOption $null) -eq 'MemoryAndFile') 'Handler results are interpreted like PSReadLine'
+
+    # Ctrl+R and Ctrl+F receive selections through a private file, never the clipboard.
+    function Global:Start-Process {
+        param($FilePath, [string[]]$ArgumentList, [switch]$Wait, [switch]$NoNewWindow)
+        $script:selectionArguments = $ArgumentList
+        [IO.File]::WriteAllText($ArgumentList[2].Trim('"'), $script:simulatedSelection, [Text.UTF8Encoding]::new($false))
+    }
+    function Global:Get-Clipboard { throw 'Selections must not read the clipboard' }
+    function Global:Set-Clipboard { throw 'Selections must not write the clipboard' }
+    try {
+        $script:simulatedSelection = "git commit -m `"multi`nline`" `u{e9}`u{1F680}"
+        $selected = Invoke-ZigstorySelection 'search'
+        Assert-True ($selected -ceq $script:simulatedSelection) 'Ctrl+R receives the selection through a private file instead of the clipboard'
+        Assert-True ($script:selectionArguments[0] -eq 'search' -and $script:selectionArguments[1] -eq '--output' -and
+            $script:selectionArguments[2] -match '^".+"$') 'Selection file paths are quoted for Start-Process'
+        Assert-True (-not [IO.File]::Exists($script:selectionArguments[2].Trim('"'))) 'Selection files are deleted after reading'
+        $script:simulatedSelection = ''
+        Assert-True ($null -eq (Invoke-ZigstorySelection 'fzf')) 'Cancelled selections insert nothing'
+        Assert-True ($script:selectionArguments[0] -eq 'fzf') 'Ctrl+F uses the same private selection file'
+    } finally {
+        Remove-Item -Path Function:\Start-Process, Function:\Get-Clipboard, Function:\Set-Clipboard -ErrorAction SilentlyContinue
+    }
 } finally {
     Set-PSReadLineOption -AddToHistoryHandler $originalHandler
     foreach ($recording in $Global:ZigstoryRecordingProcesses) {

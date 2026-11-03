@@ -14,6 +14,7 @@ const stats = @import("cli/stats.zig");
 const ranking = zigstory.ranking;
 const recalc = @import("cli/recalc.zig");
 const perf = @import("cli/perf.zig");
+const selection = @import("cli/selection.zig");
 const logging = @import("logging.zig");
 const timing = @import("tui/timing.zig");
 
@@ -101,7 +102,7 @@ fn run(init: std.process.Init, metrics: ?*timing.Metrics) !void {
 
             std.debug.print("Command added successfully\n", .{});
         },
-        .search => {
+        .search => |params| {
             const home_dir = getHomeDir(init.environ_map) orelse {
                 std.log.err("Could not determine home directory", .{});
                 std.process.exit(1);
@@ -139,14 +140,19 @@ fn run(init: std.process.Init, metrics: ?*timing.Metrics) !void {
                 std.log.err("Error launching TUI: {}", .{err});
                 std.process.exit(1);
             };
+            defer if (result) |cmd| allocator.free(cmd);
 
-            if (result) |cmd| {
+            if (params.output) |path| {
+                selection.writeOutput(init.io, path, result) catch |err| {
+                    std.log.err("Error writing selection: {}", .{err});
+                    return err;
+                };
+            } else if (result) |cmd| {
                 std.debug.print("{s}\n", .{cmd});
                 // Copy to clipboard for easy pasting
                 clipboard.copyToClipboard(allocator, cmd) catch |err| {
                     std.log.warn("Failed to copy to clipboard: {}", .{err});
                 };
-                allocator.free(cmd);
             }
         },
         .import => |args| {
@@ -205,7 +211,7 @@ fn run(init: std.process.Init, metrics: ?*timing.Metrics) !void {
                 std.debug.print("\nImport complete!\n", .{});
                 std.debug.print("Total commands in file: {}\n", .{result.total});
                 std.debug.print("Imported: {}\n", .{result.imported});
-                std.debug.print("Skipped (duplicates): {}\n", .{result.skipped});
+                std.debug.print("Skipped (already in history): {}\n", .{result.skipped});
             }
         },
         .stats => {
@@ -259,12 +265,12 @@ fn run(init: std.process.Init, metrics: ?*timing.Metrics) !void {
             defer db.deinit();
 
             // List entries
-            list_history.listEntries(&db, args.count, allocator) catch |err| {
+            list_history.listEntries(&db, args.count, allocator, init.io) catch |err| {
                 std.log.err("Error listing entries: {}", .{err});
                 std.process.exit(1);
             };
         },
-        .fzf => {
+        .fzf => |params| {
             const home_dir = getHomeDir(init.environ_map) orelse {
                 std.log.err("Could not determine home directory", .{});
                 std.process.exit(1);
@@ -295,8 +301,14 @@ fn run(init: std.process.Init, metrics: ?*timing.Metrics) !void {
                 std.log.err("Error running fzf: {}", .{err});
                 std.process.exit(1);
             };
+            defer if (result) |cmd| allocator.free(cmd);
 
-            if (result) |cmd| {
+            if (params.output) |path| {
+                selection.writeOutput(init.io, path, result) catch |err| {
+                    std.log.err("Error writing selection: {}", .{err});
+                    return err;
+                };
+            } else if (result) |cmd| {
                 const stdout = std.Io.File.stdout();
                 stdout.writeStreamingAll(init.io, cmd) catch {};
                 stdout.writeStreamingAll(init.io, "\n") catch {};
@@ -304,7 +316,6 @@ fn run(init: std.process.Init, metrics: ?*timing.Metrics) !void {
                 clipboard.copyToClipboard(allocator, cmd) catch |err| {
                     std.log.warn("Failed to copy to clipboard: {}", .{err});
                 };
-                allocator.free(cmd);
             }
         },
         .recalc_rank => {

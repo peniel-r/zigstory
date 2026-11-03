@@ -1,48 +1,65 @@
 const std = @import("std");
 const sqlite = @import("sqlite");
+const output = @import("output.zig");
+
+/// Buckets history by local hour of day; SQLite's 'localtime' applies the system time zone.
+pub const hourly_sql =
+    \\SELECT strftime('%H', timestamp, 'unixepoch', 'localtime') as hour, COUNT(*) as count
+    \\FROM history
+    \\GROUP BY hour
+    \\ORDER BY hour
+;
 
 pub fn run(db: *sqlite.Db, allocator: std.mem.Allocator, io: std.Io) !void {
+    var buffer: [4096]u8 = undefined;
+    var report = output.Report.init(io, &buffer);
+    errdefer report.restoreCodePage();
+    try write(report.writer(), db, allocator, io);
+    try report.finish();
+}
+
+fn write(w: *std.Io.Writer, db: *sqlite.Db, allocator: std.mem.Allocator, io: std.Io) !void {
     // 1. Overview
-    std.debug.print("\nOVERVIEW\n", .{});
-    std.debug.print("--------\n", .{});
+    try w.writeAll("\nOVERVIEW\n");
+    try w.writeAll("--------\n");
 
     const total_count = try getTotalCommands(db);
-    std.debug.print("Total Commands:  {}\n", .{total_count});
+    try w.print("Total Commands:  {}\n", .{total_count});
 
     const unique_count = try getUniqueCommands(db);
-    std.debug.print("Unique Commands: {}\n", .{unique_count});
+    try w.print("Unique Commands: {}\n", .{unique_count});
 
     const session_stats = try getSessionStats(db);
-    std.debug.print("Total Sessions:  {}\n", .{session_stats.count});
+    try w.print("Total Sessions:  {}\n", .{session_stats.count});
     if (session_stats.first_cmd > 0 and session_stats.last_cmd > 0) {
         const span_sec = session_stats.last_cmd - session_stats.first_cmd;
         const days = @divFloor(span_sec, 86400);
-        std.debug.print("History Span:    {} days\n", .{days});
+        try w.print("History Span:    {} days\n", .{days});
     }
 
     const success_rate = try getSuccessRate(db);
-    std.debug.print("Success Rate:    {d:.1}%\n", .{success_rate});
+    try w.print("Success Rate:    {d:.1}%\n", .{success_rate});
 
     // 2. Most Used Commands
-    std.debug.print("\nTOP COMMANDS\n", .{});
-    std.debug.print("--------------------------------------------------\n", .{});
-    std.debug.print("{s:<4} {s:<45} {s:<8} {s:<15}\n", .{ "#", "Command", "Count", "Last Used" });
+    try w.writeAll("\nTOP COMMANDS\n");
+    try w.writeAll("--------------------------------------------------\n");
+    try w.print("{s:<4} {s:<45} {s:<8} {s:<15}\n", .{ "#", "Command", "Count", "Last Used" });
 
-    try printTopCommands(db, allocator, io);
+    try printTopCommands(w, db, allocator, io);
 
     // 3. Execution Distribution (Hourly)
-    std.debug.print("\nACTIVITY BY HOUR\n", .{});
-    std.debug.print("----------------\n", .{});
+    try w.writeAll("\nACTIVITY BY HOUR\n");
+    try w.writeAll("----------------\n");
 
-    try printHourlyDistribution(db, allocator);
+    try printHourlyDistribution(w, db, allocator);
 
     // 4. Directory Breakdown
-    std.debug.print("\nTOP DIRECTORIES\n", .{});
-    std.debug.print("---------------\n", .{});
+    try w.writeAll("\nTOP DIRECTORIES\n");
+    try w.writeAll("---------------\n");
 
-    try printTopDirectories(db, allocator);
+    try printTopDirectories(w, db, allocator);
 
-    std.debug.print("\n", .{});
+    try w.writeAll("\n");
 }
 
 fn getTotalCommands(db: *sqlite.Db) !i64 {
@@ -118,7 +135,7 @@ fn getSuccessRate(db: *sqlite.Db) !f64 {
     return 0.0;
 }
 
-fn printTopCommands(db: *sqlite.Db, allocator: std.mem.Allocator, io: std.Io) !void {
+fn printTopCommands(w: *std.Io.Writer, db: *sqlite.Db, allocator: std.mem.Allocator, io: std.Io) !void {
     const query =
         \\SELECT cmd, COUNT(*) as count, MAX(timestamp) as last_used
         \\FROM history
@@ -147,33 +164,21 @@ fn printTopCommands(db: *sqlite.Db, allocator: std.mem.Allocator, io: std.Io) !v
 
         const time_str = try formatRelativeTime(row.last_used, arena.allocator(), io);
 
-        // Truncate command if too long
-        var display_cmd = try arena.allocator().dupe(u8, row.cmd);
-        if (display_cmd.len > 45) {
-            display_cmd[42] = '.';
-            display_cmd[43] = '.';
-            display_cmd[44] = '.';
-            display_cmd = display_cmd[0..45];
-        }
+        // Show the first line, truncated without splitting UTF-8 sequences.
+        var cmd_buf: [45]u8 = undefined;
+        const display_cmd = output.ellipsize(&cmd_buf, row.cmd, cmd_buf.len);
 
-        std.debug.print("{d:<2}   {s:<45} {d:<8} {s:<15}\n", .{ index, display_cmd, row.count, time_str });
+        try w.print("{d:<2}   {s:<45} {d:<8} {s:<15}\n", .{ index, display_cmd, row.count, time_str });
         index += 1;
     }
 }
 
-fn printHourlyDistribution(db: *sqlite.Db, allocator: std.mem.Allocator) !void {
+fn printHourlyDistribution(w: *std.Io.Writer, db: *sqlite.Db, allocator: std.mem.Allocator) !void {
     // Initialize array for 24 hours
     var hours = [_]i64{0} ** 24;
     var max_count: i64 = 0;
 
-    const query =
-        \\SELECT strftime('%H', datetime(timestamp, 'unixepoch')) as hour, COUNT(*) as count
-        \\FROM history
-        \\GROUP BY hour
-        \\ORDER BY hour
-    ;
-
-    var stmt = try db.prepare(query);
+    var stmt = try db.prepare(hourly_sql);
     defer stmt.deinit();
 
     const Row = struct {
@@ -198,36 +203,27 @@ fn printHourlyDistribution(db: *sqlite.Db, allocator: std.mem.Allocator) !void {
     }
 
     if (max_count == 0) {
-        std.debug.print("No data available.\n", .{});
+        try w.writeAll("No data available.\n");
         return;
     }
 
     // Print chart
-    const time_labels = [_][]const u8{ "00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23" };
-
-    for (0..24) |i| {
-        const count = hours[i];
-
+    for (hours, 0..) |count, hour| {
         // Calculate bar length (max 40 chars)
-        const bar_len = if (max_count > 0) @divFloor(count * 40, max_count) else 0;
+        const bar_len: usize = @intCast(@divFloor(count * 40, max_count));
 
-        std.debug.print("{s} | ", .{time_labels[i]});
-
-        var j: i64 = 0;
-        while (j < bar_len) : (j += 1) {
-            // Use Extended ASCII Full Block (0xDB)
-            std.debug.print("\xDB", .{});
-        }
+        try w.print("{d:0>2} | ", .{hour});
+        try w.splatBytesAll("█", bar_len);
 
         if (count > 0) {
-            std.debug.print(" {}\n", .{count});
+            try w.print(" {}\n", .{count});
         } else {
-            std.debug.print("\n", .{});
+            try w.writeAll("\n");
         }
     }
 }
 
-fn printTopDirectories(db: *sqlite.Db, allocator: std.mem.Allocator) !void {
+fn printTopDirectories(w: *std.Io.Writer, db: *sqlite.Db, allocator: std.mem.Allocator) !void {
     const query =
         \\SELECT cwd, COUNT(*) as count
         \\FROM history
@@ -246,7 +242,7 @@ fn printTopDirectories(db: *sqlite.Db, allocator: std.mem.Allocator) !void {
 
     var iter = try stmt.iterator(Row, .{});
 
-    std.debug.print("{s:<8} {s}\n", .{ "Count", "Directory" });
+    try w.print("{s:<8} {s}\n", .{ "Count", "Directory" });
 
     while (true) {
         var arena = std.heap.ArenaAllocator.init(allocator);
@@ -254,7 +250,7 @@ fn printTopDirectories(db: *sqlite.Db, allocator: std.mem.Allocator) !void {
 
         const row = (try iter.nextAlloc(arena.allocator(), .{})) orelse break;
 
-        std.debug.print("{d:<8} {s}\n", .{ row.count, row.cwd });
+        try w.print("{d:<8} {s}\n", .{ row.count, row.cwd });
     }
 }
 

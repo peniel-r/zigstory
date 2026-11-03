@@ -108,15 +108,6 @@ fn printText(metrics: PerfMetrics, threshold: i64, allocator: std.mem.Allocator)
     const avg_str = try formatDuration(metrics.avg_duration_ms, allocator);
     defer allocator.free(avg_str);
 
-    // Truncate command if too long
-    var display_cmd = metrics.last_cmd;
-    if (display_cmd.len > 30) {
-        const truncated = try allocator.dupe(u8, metrics.last_cmd[0..30]);
-        defer allocator.free(truncated);
-        display_cmd = try std.fmt.allocPrint(allocator, "{s}...", .{truncated});
-        defer allocator.free(display_cmd);
-    }
-
     std.debug.print("{s} avg", .{avg_str});
 
     // Show warning if last command was slow
@@ -134,7 +125,8 @@ fn printText(metrics: PerfMetrics, threshold: i64, allocator: std.mem.Allocator)
 
 /// Print metrics in JSON format
 fn printJson(metrics: PerfMetrics, allocator: std.mem.Allocator, io: std.Io) !void {
-    const json = try std.json.Stringify.valueAlloc(allocator, metrics, .{});
+    // ASCII-only JSON decodes correctly whatever code page the consumer assumes.
+    const json = try std.json.Stringify.valueAlloc(allocator, metrics, .{ .escape_unicode = true });
     defer allocator.free(json);
     const stdout = std.Io.File.stdout();
     try stdout.writeStreamingAll(io, json);

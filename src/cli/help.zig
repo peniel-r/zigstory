@@ -43,18 +43,21 @@ pub fn printHelp() void {
         \\
         \\-------------------------------------------------------------------------------
         \\
-        \\  zigstory search
+        \\  zigstory search [OPTIONS]
         \\    Launch an interactive TUI (Terminal User Interface) for searching and
         \\    selecting commands from your history.
+        \\
+        \\    OPTIONS:
+        \\      -o, --output <PATH>      Write the selection to a file (empty when cancelled)
         \\
         \\    FEATURES:
         \\      * Real-time substring search as you type
         \\      * Paged results with full counts and no fixed result limit
-        \\      * Keyboard navigation (Up/Down, Page Up/Down, Ctrl+K/J)
-        \\      * Selected command copied to clipboard
+        \\      * Keyboard navigation (Up/Down, Ctrl+P/N, Page Up/Down, Ctrl+K/J)
+        \\      * Selected command copied to clipboard (unless --output is given)
         \\
         \\    KEYBINDINGS:
-        \\      Up/Down       Navigate up/down
+        \\      Up/Down       Navigate up/down (also Ctrl+P/Ctrl+N)
         \\      Page Up/Down  Scroll by page
         \\      Ctrl+K/J      Page up/down (vim-style)
         \\      Ctrl+F        Toggle global/current-directory filtering
@@ -70,14 +73,17 @@ pub fn printHelp() void {
         \\
         \\-------------------------------------------------------------------------------
         \\
-        \\  zigstory fzf
+        \\  zigstory fzf [OPTIONS]
         \\    Launch fzf-based search interface (requires fzf to be installed).
         \\    Provides a familiar fzf experience for users who prefer it.
+        \\
+        \\    OPTIONS:
+        \\      -o, --output <PATH>      Write the selection to a file (empty when cancelled)
         \\
         \\    FEATURES:
         \\      * Uses external fzf binary for search
         \\      * Full fzf keybindings and features
-        \\      * Selected command copied to clipboard
+        \\      * Selected command copied to clipboard (unless --output is given)
         \\
         \\    REQUIREMENTS:
         \\      fzf must be installed and available in PATH
@@ -96,7 +102,8 @@ pub fn printHelp() void {
         \\          --consume            Delete event-ID payload after commit; retain failures with .error
         \\
         \\    FEATURES:
-        \\      * Duplicate detection for PSReadLine history
+        \\      * Re-imports skip commands already in history (including live recordings)
+        \\      * Multi-line PSReadLine entries are rebuilt from backtick continuations
         \\      * Progress tracking during import
         \\      * Handles large history files (10,000+ commands)
         \\      * Atomic history, statistics, and new-entry rank updates
@@ -312,7 +319,11 @@ fn printSearchHelp() void {
         \\zigstory search - Interactive TUI search
         \\
         \\USAGE:
-        \\    zigstory search
+        \\    zigstory search [OPTIONS]
+        \\
+        \\OPTIONS:
+        \\    -o, --output <PATH>      Write the selection to a file instead of printing and
+        \\                             copying it; the file is left empty when cancelled
         \\
         \\DESCRIPTION:
         \\    Launches an interactive Terminal User Interface for searching and selecting
@@ -320,7 +331,7 @@ fn printSearchHelp() void {
         \\    and keyboard navigation.
         \\
         \\KEYBINDINGS:
-        \\    ↑/↓                      Navigate up/down
+        \\    ↑/↓ or Ctrl+P/Ctrl+N     Navigate up/down
         \\    Page Up/Down             Scroll by page
         \\    Ctrl+K/J                 Page up/down (vim-style)
         \\    Ctrl+F                   Toggle global/current-directory filtering
@@ -335,7 +346,7 @@ fn printSearchHelp() void {
         \\    • Real-time substring search as you type
         \\    • Paged results with full counts and no fixed result limit
         \\    • Indexed timestamp ordering for recent-history browsing
-        \\    • Selected command copied to clipboard
+        \\    • Selected command copied to clipboard (unless --output is given)
         \\
         \\EXAMPLES:
         \\    zigstory search
@@ -351,7 +362,11 @@ fn printFzfHelp() void {
         \\zigstory fzf - fzf-based search
         \\
         \\USAGE:
-        \\    zigstory fzf
+        \\    zigstory fzf [OPTIONS]
+        \\
+        \\OPTIONS:
+        \\    -o, --output <PATH>      Write the selection to a file instead of printing and
+        \\                             copying it; the file is left empty when cancelled
         \\
         \\DESCRIPTION:
         \\    Launches fzf-based search interface. Requires fzf to be installed and
@@ -365,7 +380,7 @@ fn printFzfHelp() void {
         \\FEATURES:
         \\    • Uses external fzf binary for search
         \\    • Full fzf keybindings and features
-        \\    • Selected command copied to clipboard
+        \\    • Selected command copied to clipboard (unless --output is given)
         \\
         \\EXAMPLES:
         \\    zigstory fzf
@@ -390,11 +405,13 @@ fn printImportHelp() void {
         \\DESCRIPTION:
         \\    Imports existing PowerShell history into the zigstory database.
         \\    Automatically detects the PowerShell history file location if no
-        \\    file is specified. Includes duplicate detection to prevent importing
-        \\    the same commands multiple times.
+        \\    file is specified. PSReadLine history has no timestamps, so entries are
+        \\    matched by command: if history already holds N copies of a command, the
+        \\    first N occurrences in the file are skipped. Importing again adds nothing.
         \\
         \\FEATURES:
-        \\    • Duplicate detection for PSReadLine history
+        \\    • Re-imports skip commands already in history (including live recordings)
+        \\    • Multi-line PSReadLine entries are rebuilt from backtick continuations
         \\    • Progress tracking during import
         \\    • Handles large history files (10,000+ commands)
         \\    • Atomic history, statistics, and new-entry rank updates

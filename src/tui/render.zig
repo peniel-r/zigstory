@@ -331,9 +331,6 @@ pub fn renderStatusBar(
     };
     fillRowBackground(win, 1, bar_style);
 
-    var status_buf: [512]u8 = undefined;
-    var status_text: []const u8 = "";
-
     const search_style = vaxis.Style{
         .fg = colors.fg_success,
         .bg = colors.bg_primary,
@@ -346,31 +343,42 @@ pub fn renderStatusBar(
         .bold = true,
     };
 
-    if (command_mode) {
-        status_text = std.fmt.bufPrint(&status_buf, " :{s}", .{
-            command_buffer,
-        }) catch " : ";
-    } else if (is_searching) {
-        status_text = std.fmt.bufPrint(&status_buf, " Search: {s}| ({d} results) {s} | [FILTER: {s}]", .{
-            query,
-            result_count,
-            if (selections_count > 0) std.fmt.bufPrint(status_buf[256..], "| {d} selected", .{selections_count}) catch "" else "",
-            filter_mode orelse "Global",
-        }) catch " Error ";
-    } else {
-        status_text = std.fmt.bufPrint(&status_buf, " {d} commands | {d}/{d} | Type to search {s} | [FILTER: {s}]", .{
-            total_count,
-            if (total_count > 0) selected_index + 1 else 0,
-            total_count,
-            if (selections_count > 0) std.fmt.bufPrint(status_buf[256..], "| {d} selected", .{selections_count}) catch "" else "",
-            filter_mode orelse "Global",
-        }) catch " Error ";
-    }
-
-    // Duplicate status_text to ensure it survives the frame
-    const status_safe = try allocator.dupe(u8, status_text);
+    // Allocated from the frame arena so it survives until the frame is rendered.
+    const status_text = try statusText(allocator, is_searching, query, total_count, selected_index, result_count, selections_count, filter_mode, command_mode, command_buffer);
     const style = if (command_mode) command_style else search_style;
-    _ = win.printSegment(.{ .text = prefixByCells(win, status_safe, win.width), .style = style }, .{ .row_offset = 1, .col_offset = 0, .wrap = .none });
+    _ = win.printSegment(.{ .text = prefixByCells(win, status_text, win.width), .style = style }, .{ .row_offset = 1, .col_offset = 0, .wrap = .none });
+}
+
+pub fn statusText(
+    allocator: std.mem.Allocator,
+    is_searching: bool,
+    query: []const u8,
+    total_count: usize,
+    selected_index: usize,
+    result_count: usize,
+    selections_count: usize,
+    filter_mode: ?[]const u8,
+    command_mode: bool,
+    command_buffer: []const u8,
+) ![]const u8 {
+    if (command_mode) return std.fmt.allocPrint(allocator, " :{s}", .{command_buffer});
+
+    var selected_buf: [32]u8 = undefined;
+    const selected = if (selections_count > 0)
+        std.fmt.bufPrint(&selected_buf, "| {d} selected", .{selections_count}) catch unreachable
+    else
+        "";
+    const filter = filter_mode orelse "Global";
+    if (is_searching) {
+        return std.fmt.allocPrint(allocator, " Search: {s}| ({d} results) {s} | [FILTER: {s}]", .{ query, result_count, selected, filter });
+    }
+    return std.fmt.allocPrint(allocator, " {d} commands | {d}/{d} | Type to search {s} | [FILTER: {s}]", .{
+        total_count,
+        if (total_count > 0) selected_index + 1 else 0,
+        total_count,
+        selected,
+        filter,
+    });
 }
 
 pub fn renderHelpBar(win: vaxis.Window) void {
@@ -446,4 +454,16 @@ test "rendering truncates whole graphemes and highlights by terminal columns" {
     try std.testing.expect(std.unicode.utf8ValidateSlice(truncated));
     renderHelpBar(win);
     try std.testing.expectEqualStrings("N", vx.screen.readCell(5, 4).?.char.grapheme);
+}
+
+test "status text keeps long queries and selection counts intact" {
+    const allocator = std.testing.allocator;
+    const query = "q" ** 600;
+    const searching = try statusText(allocator, true, query, 0, 0, 3, 2, "Current Dir", false, "");
+    defer allocator.free(searching);
+    try std.testing.expect(std.mem.indexOf(u8, searching, query) != null);
+    try std.testing.expect(std.mem.endsWith(u8, searching, "| (3 results) | 2 selected | [FILTER: Current Dir]"));
+    const browsing = try statusText(allocator, false, "", 10, 4, 0, 0, null, false, "");
+    defer allocator.free(browsing);
+    try std.testing.expectEqualStrings(" 10 commands | 5/10 | Type to search  | [FILTER: Global]", browsing);
 }

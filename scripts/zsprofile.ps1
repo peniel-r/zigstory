@@ -195,16 +195,40 @@ function Global:Initialize-ZigstoryHistoryCapture {
     $Global:ZigstoryPreviousHistoryHandler = (Get-PSReadLineOption).AddToHistoryHandler
     Set-PSReadLineOption -AddToHistoryHandler {
         param($line)
+        $decision = if ($null -ne $Global:ZigstoryPreviousHistoryHandler) {
+            $Global:ZigstoryPreviousHistoryHandler.Invoke($line)
+        } else { $true }
+        # Remember PSReadLine's decision: commands it keeps out of its history file,
+        # such as lines that appear to contain secrets, are not recorded either.
         $Global:ZigstoryAcceptedCommand = [pscustomobject]@{
             Command = $line
             Directory = $PWD.ProviderPath
+            HistoryOption = Get-ZigstoryHistoryOption $decision
         }
-        if ($null -ne $Global:ZigstoryPreviousHistoryHandler) {
-            return $Global:ZigstoryPreviousHistoryHandler.Invoke($line)
-        }
-        return $true
+        return $decision
     }
     $Global:ZigstoryHistoryCaptureInstalled = $true
+}
+
+function Global:Get-ZigstoryHistoryOption($Decision) {
+    # Interpret AddToHistoryHandler results the way PSReadLine does.
+    if ($Decision -is [bool]) { return $(if ($Decision) { 'MemoryAndFile' } else { 'SkipAdding' }) }
+    if ($null -ne $Decision) {
+        try { return ([Microsoft.PowerShell.AddToHistoryOption]$Decision).ToString() } catch { }
+    }
+    return 'MemoryAndFile'
+}
+
+function Global:Test-ZigstoryHistoryAllowed([string]$Command, $Accepted) {
+    # Record only commands that PSReadLine would also save to its history file.
+    $option = if ($null -ne $Accepted) { $Accepted.PSObject.Properties['HistoryOption'] } else { $null }
+    if ($null -ne $option) { return $option.Value -eq 'MemoryAndFile' }
+    # Without an acceptance decision, apply PSReadLine's sensitive-data check when available.
+    $readLine = 'Microsoft.PowerShell.PSConsoleReadLine' -as [type]
+    if ($null -ne $readLine -and $null -ne $readLine.GetMethod('GetDefaultAddToHistoryOption')) {
+        return $readLine::GetDefaultAddToHistoryOption($Command).ToString() -eq 'MemoryAndFile'
+    }
+    return $true
 }
 
 function Global:Get-ZigstoryExitCode([bool]$Succeeded, $NativeExitCode, [string]$Command) {
@@ -256,14 +280,13 @@ function Global:Prompt {
     if ($lastHistory -and $lastHistory.Id -ne $Global:ZigstoryLastHistoryId) {
         $Global:ZigstoryLastHistoryId = $lastHistory.Id
         try {
-            if (ZigstoryShouldRecord $lastHistory.CommandLine) {
+            $accepted = $Global:ZigstoryAcceptedCommand
+            if ($null -ne $accepted -and $accepted.Command -cne $lastHistory.CommandLine) { $accepted = $null }
+            if ((Test-ZigstoryHistoryAllowed $lastHistory.CommandLine $accepted) -and
+                (ZigstoryShouldRecord $lastHistory.CommandLine)) {
                 $duration = [long][Math]::Max(0, $lastHistory.Duration.TotalMilliseconds)
                 $exitCode = Get-ZigstoryExitCode $commandSucceeded $nativeExitCode $lastHistory.CommandLine
-                $cwd = $Global:ZigstoryPromptDirectory
-                if ($null -ne $Global:ZigstoryAcceptedCommand -and
-                    $Global:ZigstoryAcceptedCommand.Command -ceq $lastHistory.CommandLine) {
-                    $cwd = $Global:ZigstoryAcceptedCommand.Directory
-                }
+                $cwd = if ($null -ne $accepted) { $accepted.Directory } else { $Global:ZigstoryPromptDirectory }
                 $timestamp = ([DateTimeOffset]$lastHistory.StartExecutionTime).ToUnixTimeSeconds()
                 ZigstoryRecordCommand $lastHistory.CommandLine $cwd $exitCode $duration $timestamp
             }
@@ -354,6 +377,31 @@ if (Test-Path $Global:ZigstoryBin) {
         # Launch TUI directly
         & $Global:ZigstoryBin search
     }
+
+    # Runs the TUI or fzf and returns the selected command, if any. The selection
+    # comes back through a private temporary file instead of the clipboard, so the
+    # clipboard and its history are untouched and text copied elsewhere meanwhile
+    # is never mistaken for a selection.
+    function Global:Invoke-ZigstorySelection {
+        param([Parameter(Mandatory)][ValidateSet('search', 'fzf')][string]$Command)
+        $output = [IO.Path]::GetTempFileName()
+        try {
+            $savedLaunch = $env:ZIGSTORY_TUI_LAUNCH_NS
+            try {
+                if ($Command -eq 'search' -and $env:ZIGSTORY_TUI_PROFILE) {
+                    $env:ZIGSTORY_TUI_LAUNCH_NS = [string][decimal]::Truncate(
+                        [decimal][Diagnostics.Stopwatch]::GetTimestamp() * 1000000000 / [Diagnostics.Stopwatch]::Frequency)
+                }
+                # Start-Process -NoNewWindow is more reliable for TUIs from key handlers.
+                # It joins arguments without quoting them, so quote the path explicitly.
+                Start-Process -FilePath $Global:ZigstoryBin -ArgumentList $Command, '--output', "`"$output`"" -Wait -NoNewWindow
+            } finally { $env:ZIGSTORY_TUI_LAUNCH_NS = $savedLaunch }
+            $selected = [IO.File]::ReadAllText($output)
+            if ($selected) { return $selected }
+        } finally {
+            [IO.File]::Delete($output)
+        }
+    }
     
     # Create short alias
     Set-Alias -Name zs -Value Search-ZigstoryHistory -Scope Global
@@ -363,44 +411,19 @@ if (Test-Path $Global:ZigstoryBin) {
         Import-Module PSReadLine
         Initialize-ZigstoryHistoryCapture
         Set-PSReadLineKeyHandler -Key "Ctrl+r" -ScriptBlock {
-            $oldClip = Get-Clipboard -Raw
-            # Mark clipboard so we know if selection happened
-            Set-Clipboard -Value "__ZS_CANCEL__"
-            
-            # Start-Process -NoNewWindow is more reliable for TUIs from key handlers
-            $savedLaunch = $env:ZIGSTORY_TUI_LAUNCH_NS
-            try {
-                if ($env:ZIGSTORY_TUI_PROFILE) {
-                    $env:ZIGSTORY_TUI_LAUNCH_NS = [string][decimal]::Truncate(
-                        [decimal][Diagnostics.Stopwatch]::GetTimestamp() * 1000000000 / [Diagnostics.Stopwatch]::Frequency)
-                }
-                $p = Start-Process -FilePath $Global:ZigstoryBin -ArgumentList "search" -Wait -NoNewWindow -PassThru
-            } finally { $env:ZIGSTORY_TUI_LAUNCH_NS = $savedLaunch }
-            
-            $selected = Get-Clipboard -Raw
-            if ($selected -and $selected -ne "__ZS_CANCEL__") {
+            $selected = Invoke-ZigstorySelection 'search'
+            if ($selected) {
                 [Microsoft.PowerShell.PSConsoleReadLine]::DeleteLine()
                 [Microsoft.PowerShell.PSConsoleReadLine]::Insert($selected)
-            } elseif ($oldClip) {
-                Set-Clipboard -Value $oldClip
             }
         }
 
         # Bind Ctrl+F to fzf search
         Set-PSReadLineKeyHandler -Key "Ctrl+f" -ScriptBlock {
-            $oldClip = Get-Clipboard -Raw
-            # Mark clipboard so we know if selection happened
-            Set-Clipboard -Value "__ZS_FZF_CANCEL__"
-            
-            # Start-Process -NoNewWindow is more reliable for TUIs from key handlers
-            $p = Start-Process -FilePath $Global:ZigstoryBin -ArgumentList "fzf" -Wait -NoNewWindow -PassThru
-            
-            $selected = Get-Clipboard -Raw
-            if ($selected -and $selected -ne "__ZS_FZF_CANCEL__") {
+            $selected = Invoke-ZigstorySelection 'fzf'
+            if ($selected) {
                 [Microsoft.PowerShell.PSConsoleReadLine]::DeleteLine()
                 [Microsoft.PowerShell.PSConsoleReadLine]::Insert($selected)
-            } elseif ($oldClip) {
-                Set-Clipboard -Value $oldClip
             }
         }
     }

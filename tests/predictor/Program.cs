@@ -5,8 +5,15 @@ using zigstoryPredictor;
 
 if (args.Length > 0 && args[0] == "--terminal-child")
 {
-    if (args.Length != 2) throw new ArgumentException("Usage: --terminal-child <zigstory.exe>");
-    Environment.ExitCode = TerminalChecks.RunChild(args[1]);
+    if (args.Length < 2) throw new ArgumentException("Usage: --terminal-child <application> [arguments...]");
+    Environment.ExitCode = TerminalChecks.RunChild(args[1], args[2..]);
+    return;
+}
+
+if (args.Length > 0 && args[0] == "--console-code-page")
+{
+    if (args.Length > 2) throw new ArgumentException("Usage: --console-code-page [code-page-to-set]");
+    Environment.ExitCode = TerminalChecks.ConsoleCodePage(args.Length == 2 ? args[1] : null);
     return;
 }
 
@@ -145,6 +152,19 @@ try
             Environment.SetEnvironmentVariable("ZIGSTORY_LOG_DIR", previousDirectory);
         }
     }
+    var releasePath = Path.Combine(directory, "release.db");
+    using (var releaseWriter = OpenDatabase(releasePath))
+    {
+        Execute(releaseWriter, """
+            CREATE TABLE history (id INTEGER PRIMARY KEY, cmd TEXT, rank REAL, timestamp INTEGER);
+            INSERT INTO history VALUES (1,'git status',1,1);
+            """);
+        var releasing = new ZigstoryPredictor(releasePath);
+        Check(Text(Get(releasing, "git")).SequenceEqual(["git status"]), "Predictor reads history before disposal");
+        releasing.Dispose();
+    }
+    try { File.Delete(releasePath); } catch (IOException) { }
+    Check(!File.Exists(releasePath), "Disposing the predictor releases the history database file");
     if (args.Contains("--benchmark"))
     {
         var predictionQuery = typeof(ZigstoryPredictor)

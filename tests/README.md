@@ -58,12 +58,18 @@ updates. TUI regressions include Unicode grapheme deletion and Windows-path
 colons, cell-aware truncation/highlighting, unchanged-event redraw suppression,
 deterministic latest-row deduplication, independent search caches, and cache
 invalidation after same-connection and external writes (including read-only main
-connections). Core tests also verify PSReadLine import chronology.
-JSON regressions exercise the explicit maintenance command. Recording
-tests run real asynchronous importers against isolated history, covering launch,
-import, database-startup and post-commit cleanup failures, retry/deduplication,
-shell exit before import completes, 64-bit duration, history-filter preservation,
-and prompt status/directory/time.
+connections). Core tests also verify PSReadLine import chronology, multi-line
+(backtick-continued) entries, idempotent re-imports that skip commands already
+recorded live, `search`/`fzf --output` parsing and writing, and UTF-8-safe report
+truncation; TUI tests cover status text with long queries and selections.
+JSON regressions exercise the explicit maintenance command, ASCII-escaped `perf`
+JSON, and UTF-8 `stats`/`list` reports on stdout with local-time hourly buckets.
+Recording tests run real asynchronous importers against isolated history, covering
+launch, import, database-startup and post-commit cleanup failures,
+retry/deduplication, shell exit before import completes, 64-bit duration,
+history-filter preservation, and prompt status/directory/time. They also verify
+that commands PSReadLine keeps out of its history file are not recorded, and that
+Ctrl+R/Ctrl+F selections arrive through a private file without clipboard access.
 They extract helper functions without loading the complete profile or predictor.
 
 `pwsh -NoProfile -File tests\upgrade_regressions.ps1` exercises safe upgrades on
@@ -119,8 +125,8 @@ dotnet run --project tests\predictor\PredictorRegressionTests.csproj -c Release 
 
 These check cache freshness after committed writes/rank changes, stable suggestion
 ownership, literal wildcard/path handling, concurrent callers, in-flight SQLite
-cancellation, and error diagnostics. All databases are temporary; no profile is
-loaded or installed.
+cancellation, error diagnostics, and that disposing the predictor releases the
+database file. All databases are temporary; no profile is loaded or installed.
 
 ## Performance gates
 
@@ -166,6 +172,10 @@ just terminal-profile
 
 ConPTY checks launch the actual CLI with private history, verify first-frame
 timings and real output, type a query, and cancel without selecting a command.
+They then select a command with Enter and verify it is written to a `--output`
+file (replacing stale contents, with a space in the path), and run `stats` on
+code pages 437 and 65001 to verify UTF-8 text and bars render and the console
+code page is restored.
 An attached helper opens read/write console handles explicitly so a redirected
 test runner's handles cannot leak into the TUI. Reports contain aggregate timings
 only. This covers the Windows console path, not display composition or physical

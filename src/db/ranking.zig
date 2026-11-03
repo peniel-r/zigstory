@@ -92,7 +92,7 @@ pub fn createCmdHashIndex(db: *sqlite.Db) !void {
 }
 
 /// Backfill cmd_hash for existing history entries that don't have it
-pub fn backfillCmdHashes(db: *sqlite.Db, allocator: std.mem.Allocator) !void {
+pub fn backfillCmdHashes(db: *sqlite.Db, allocator: std.mem.Allocator, verbose: bool) !void {
     // Check if backfill is needed
     var count_stmt = try db.prepare("SELECT COUNT(*) as count FROM history WHERE cmd_hash IS NULL");
     defer count_stmt.deinit();
@@ -101,15 +101,15 @@ pub fn backfillCmdHashes(db: *sqlite.Db, allocator: std.mem.Allocator) !void {
     var iter = try count_stmt.iterator(CountResult, .{});
     const null_count = (try iter.next(.{})).?.count;
 
-    std.debug.print("Found {} entries without cmd_hash\n", .{null_count});
+    if (verbose) std.debug.print("Found {} entries without cmd_hash\n", .{null_count});
 
     if (null_count == 0) {
         // No backfill needed
-        std.debug.print("No backfill needed - all entries have cmd_hash\n", .{});
+        if (verbose) std.debug.print("No backfill needed - all entries have cmd_hash\n", .{});
         return;
     }
 
-    std.debug.print("Backfilling cmd_hash for {} existing entries...\n", .{null_count});
+    if (verbose) std.debug.print("Backfilling cmd_hash for {} existing entries...\n", .{null_count});
 
     // Get all entries without cmd_hash
     const query = "SELECT id, cmd FROM history WHERE cmd_hash IS NULL";
@@ -156,12 +156,12 @@ pub fn backfillCmdHashes(db: *sqlite.Db, allocator: std.mem.Allocator) !void {
 
         processed += 1;
 
-        if (processed % 1000 == 0) {
+        if (verbose and processed % 1000 == 0) {
             std.debug.print("\rBackfilled {} entries...", .{processed});
         }
     }
 
-    std.debug.print("\rBackfilled {} entries.\n", .{processed});
+    if (verbose) std.debug.print("\rBackfilled {} entries.\n", .{processed});
 
     // Commit transaction
     {
@@ -170,7 +170,7 @@ pub fn backfillCmdHashes(db: *sqlite.Db, allocator: std.mem.Allocator) !void {
         try commit_stmt.exec(.{}, .{});
     }
 
-    std.debug.print("Backfill completed successfully!\n", .{});
+    if (verbose) std.debug.print("Backfill completed successfully!\n", .{});
 }
 
 /// Initialize ranking tables and columns

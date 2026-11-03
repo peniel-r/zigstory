@@ -26,7 +26,9 @@ public sealed class DatabaseManager : IDisposable
         {
             DataSource = dbPath,
             Mode = SqliteOpenMode.ReadOnly,
-            Pooling = true,
+            // This class keeps its own open connection; driver pooling would also keep
+            // the database file open after Dispose.
+            Pooling = false,
         }.ToString();
     }
 

@@ -1,5 +1,6 @@
 const std = @import("std");
 const sqlite = @import("sqlite");
+const output = @import("output.zig");
 
 /// Formats a duration in milliseconds to a human-readable string
 fn formatDuration(allocator: std.mem.Allocator, duration_ms: i64) ![]const u8 {
@@ -25,18 +26,16 @@ fn formatTimestamp(allocator: std.mem.Allocator, timestamp: i64) ![]const u8 {
     return try std.fmt.allocPrint(allocator, "{d}", .{timestamp});
 }
 
-/// Truncates a string to fit within a maximum width, adding "..." if truncated
-fn truncateString(allocator: std.mem.Allocator, str: []const u8, max_width: usize) ![]const u8 {
-    if (str.len <= max_width) {
-        return try allocator.dupe(u8, str);
-    }
-
-    const truncated = str[0..(max_width - 3)];
-    return try std.fmt.allocPrint(allocator, "{s}...", .{truncated});
+/// Lists the last N entries from command history
+pub fn listEntries(db: *sqlite.Db, requested_count: usize, allocator: std.mem.Allocator, io: std.Io) !void {
+    var buffer: [4096]u8 = undefined;
+    var report = output.Report.init(io, &buffer);
+    errdefer report.restoreCodePage();
+    try writeEntries(report.writer(), db, requested_count, allocator);
+    try report.finish();
 }
 
-/// Lists the last N entries from command history
-pub fn listEntries(db: *sqlite.Db, requested_count: usize, allocator: std.mem.Allocator) !void {
+fn writeEntries(w: *std.Io.Writer, db: *sqlite.Db, requested_count: usize, allocator: std.mem.Allocator) !void {
     // Query for total count
     const count_query = "SELECT COUNT(*) as count FROM history";
     var count_stmt = try db.prepare(count_query);
@@ -44,14 +43,14 @@ pub fn listEntries(db: *sqlite.Db, requested_count: usize, allocator: std.mem.Al
 
     var count_iter = try count_stmt.iterator(struct { count: i64 }, .{});
     const count_row = (try count_iter.next(.{})) orelse {
-        std.debug.print("No commands in history\n", .{});
+        try w.writeAll("No commands in history\n");
         return;
     };
     const total_count = count_row.count;
 
     // If no entries, show message and return
     if (total_count == 0) {
-        std.debug.print("No commands in history\n", .{});
+        try w.writeAll("No commands in history\n");
         return;
     }
 
@@ -76,8 +75,8 @@ pub fn listEntries(db: *sqlite.Db, requested_count: usize, allocator: std.mem.Al
     var index: usize = 0;
 
     // Print header
-    std.debug.print("Showing {} of {} entries\n", .{ show_count, total_count });
-    std.debug.print("========================\n", .{});
+    try w.print("Showing {} of {} entries\n", .{ show_count, total_count });
+    try w.writeAll("========================\n");
 
     while (true) {
         // Use arena allocator for each row iteration
@@ -94,17 +93,18 @@ pub fn listEntries(db: *sqlite.Db, requested_count: usize, allocator: std.mem.Al
         // Format timestamp
         const timestamp_str = try formatTimestamp(arena.allocator(), row.timestamp);
 
-        // Truncate command if too long (max 60 chars)
-        const cmd_display = try truncateString(arena.allocator(), row.cmd, 60);
+        // Show the first line, truncated without splitting UTF-8 sequences.
+        var cmd_buf: [60]u8 = undefined;
+        const cmd_display = output.ellipsize(&cmd_buf, row.cmd, cmd_buf.len);
 
         // Print entry
-        std.debug.print("\n{}. {s}\n", .{ display_index, cmd_display });
-        std.debug.print("   Dir: {s}\n", .{row.cwd});
-        std.debug.print("   Exit: {} | Duration: {s}\n", .{ row.exit_code, duration_str });
-        std.debug.print("   Time: {s}\n", .{timestamp_str});
+        try w.print("\n{}. {s}\n", .{ display_index, cmd_display });
+        try w.print("   Dir: {s}\n", .{row.cwd});
+        try w.print("   Exit: {} | Duration: {s}\n", .{ row.exit_code, duration_str });
+        try w.print("   Time: {s}\n", .{timestamp_str});
 
         index += 1;
     }
 
-    std.debug.print("\n", .{});
+    try w.writeAll("\n");
 }

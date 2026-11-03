@@ -58,6 +58,7 @@ try {
     Assert-True ((Get-Item -LiteralPath $stderr).Length -eq 0) 'Perf JSON uses stdout, not stderr'
     $metrics = ($json | Out-String) | ConvertFrom-Json
     Assert-True ($metrics.last_cmd -ceq $command) 'Perf JSON round-trips the complete command'
+    Assert-True (($json | Out-String) -notmatch '[^\x00-\x7F]') 'Perf JSON escapes non-ASCII text, so any console code page decodes it'
     Assert-True ($metrics.last_exit_code -eq 7 -and $metrics.total_commands -eq 1) 'Perf metrics preserve recorded values'
     $tieFile = Join-Path $testHome 'tie.json'
     '[{"cmd":"first","cwd":"tie"},{"cmd":"last","cwd":"tie","exit_code":2}]' |
@@ -73,6 +74,30 @@ try {
     Assert-True ($maintenance.Contains('rebuilt and validated')) 'Maintenance reports FTS rebuilding and validation'
     $afterMaintenance = & $Global:ZigstoryBin perf --cwd $cwd --format json | ConvertFrom-Json
     Assert-True ($afterMaintenance.last_cmd -ceq $command -and $afterMaintenance.total_commands -eq 1) 'Maintenance preserves recorded history'
+
+    # Reports are UTF-8 on stdout, and the hourly chart uses local time.
+    $reportHome = Join-Path $testHome 'report-home'
+    New-Item -ItemType Directory -Path $reportHome | Out-Null
+    $env:USERPROFILE = $reportHome
+    $env:HOME = $reportHome
+    $timestamp = 1700000000
+    $reportCommand = "echo r`u{e9}port"
+    $reportJson = Join-Path $reportHome 'report.json'
+    ConvertTo-Json -InputObject @(@{ cmd = $reportCommand; cwd = 'report'; timestamp = $timestamp }) -Compress |
+        Set-Content -LiteralPath $reportJson -Encoding utf8
+    & $Global:ZigstoryBin import --file $reportJson 2>&1 | Out-Null
+    Assert-True ($LASTEXITCODE -eq 0) 'Report fixture imports successfully'
+    $reportOut = Join-Path $reportHome 'out.txt'
+    $reportErr = Join-Path $reportHome 'err.txt'
+    & $Global:ZigstoryBin stats > $reportOut 2> $reportErr
+    $statsText = [IO.File]::ReadAllText($reportOut, [Text.UTF8Encoding]::new($false))
+    Assert-True ($LASTEXITCODE -eq 0 -and (Get-Item -LiteralPath $reportErr).Length -eq 0 -and $statsText.Contains('OVERVIEW')) 'Stats writes its report to stdout'
+    $localHour = [DateTimeOffset]::FromUnixTimeSeconds($timestamp).ToLocalTime().Hour
+    Assert-True ($statsText -match ('(?m)^{0:D2} \| \u2588+ 1$' -f $localHour)) 'Stats buckets activity by local hour with UTF-8 bars'
+    Assert-True ($statsText.Contains($reportCommand)) 'Stats preserves non-ASCII command text'
+    & $Global:ZigstoryBin list 1 > $reportOut 2> $reportErr
+    $listText = [IO.File]::ReadAllText($reportOut, [Text.UTF8Encoding]::new($false))
+    Assert-True ($LASTEXITCODE -eq 0 -and (Get-Item -LiteralPath $reportErr).Length -eq 0 -and $listText.Contains("1. $reportCommand")) 'List writes UTF-8 entries to stdout'
 } finally {
     $env:USERPROFILE = $originalHome
     $env:HOME = $originalUnixHome

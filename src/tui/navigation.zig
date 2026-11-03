@@ -57,17 +57,15 @@ pub const NavigationState = struct {
             }
         }
 
-        // Up arrow or Ctrl+P: Move selection up
+        // Up arrow or Ctrl+P: Move selection up. Letters always edit the query.
         if (key.matches(vaxis.Key.up, .{}) or
-            key.matches('p', .{ .ctrl = true }) or
-            (!self.is_searching and key.matches('k', .{})))
+            key.matches('p', .{ .ctrl = true }))
         {
             self.moveUp(1);
         }
         // Down arrow or Ctrl+N: Move selection down
         else if (key.matches(vaxis.Key.down, .{}) or
-            key.matches('n', .{ .ctrl = true }) or
-            (!self.is_searching and key.matches('j', .{})))
+            key.matches('n', .{ .ctrl = true }))
         {
             self.moveDown(1);
         }

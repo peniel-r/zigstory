@@ -43,109 +43,73 @@ fn getHistoryPath(allocator: std.mem.Allocator, io: std.Io) ![]const u8 {
     return error.HistoryFileNotFound;
 }
 
-/// Parse PowerShell history file
+/// Parse a PowerShell history file in file order (oldest first).
+/// PSReadLine stores each newline inside a command as a backtick followed by a
+/// line break, so continued lines are rejoined the same way PSReadLine reads them.
 /// Returns a slice of HistoryEntry (caller must free each cmd and the slice itself)
 pub fn parseHistoryFile(allocator: std.mem.Allocator, io: std.Io, file: std.Io.File) !struct { entries: []HistoryEntry, count: usize } {
     // Read entire file into memory.
     // std.fs.File was removed in Zig 0.16; use std.Io.File.
     const file_size = try file.length(io);
     const buffer = try allocator.alloc(u8, file_size);
-    errdefer allocator.free(buffer);
+    defer allocator.free(buffer);
 
     const bytes_read = try file.readPositionalAll(io, buffer, 0);
     if (bytes_read != file_size) {
         return error.ReadError;
     }
 
-    // First pass: count non-empty lines
-    var count: usize = 0;
-    var start: usize = 0;
-    const newline: u8 = '\n';
+    var commands: std.ArrayListUnmanaged([]u8) = .empty;
+    defer commands.deinit(allocator);
+    errdefer for (commands.items) |cmd| allocator.free(cmd);
+    var continued: std.ArrayListUnmanaged(u8) = .empty;
+    defer continued.deinit(allocator);
 
-    for (buffer, 0..) |byte, i| {
-        if (byte == newline or i == buffer.len - 1) {
-            const end = if (byte == newline) i else i + 1;
-            const line = buffer[start..end];
+    var content: []const u8 = buffer;
+    if (std.mem.startsWith(u8, content, "\xEF\xBB\xBF")) content = content[3..];
+    // A final line break does not start another (empty) line.
+    if (std.mem.endsWith(u8, content, "\n")) content = content[0 .. content.len - 1];
 
-            // Skip empty lines
-            if (line.len > 0 and !std.mem.eql(u8, std.mem.trim(u8, line, " \t\r"), "")) {
-                count += 1;
-            }
-            start = end + 1;
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trimEnd(u8, raw_line, "\r");
+        if (std.mem.endsWith(u8, line, "`")) {
+            try continued.appendSlice(allocator, line[0 .. line.len - 1]);
+            try continued.append(allocator, '\n');
+            continue;
         }
+        var text = line;
+        if (continued.items.len > 0) {
+            try continued.appendSlice(allocator, line);
+            text = continued.items;
+        }
+        const trimmed = std.mem.trim(u8, text, " \t\r\n");
+        if (trimmed.len > 0) {
+            try commands.ensureUnusedCapacity(allocator, 1);
+            commands.appendAssumeCapacity(try allocator.dupe(u8, trimmed));
+        }
+        continued.clearRetainingCapacity();
     }
+    // An unterminated continuation is incomplete; PSReadLine drops it as well.
 
+    const count = commands.items.len;
     if (count == 0) {
-        allocator.free(buffer);
         return .{ .entries = &.{}, .count = 0 };
     }
 
-    // Allocate array for entries
-    var index: usize = 0;
     const entries = try allocator.alloc(HistoryEntry, count);
-    errdefer {
-        // Free any allocated commands on error
-        for (entries[0..index]) |entry| {
-            allocator.free(entry.cmd);
-        }
-        allocator.free(entries);
-    }
+    errdefer allocator.free(entries);
 
-    // Second pass: parse entries
-    start = 0;
-
-    // Use a base timestamp (current time minus estimated history age)
     // PSReadLine appends new commands. Preserve file order; actual times are unknown.
     const base_timestamp = std.Io.Timestamp.now(io, .real).toSeconds();
-
-    for (buffer, 0..) |byte, i| {
-        if (byte == newline or i == buffer.len - 1) {
-            const end = if (byte == newline) i else i + 1;
-            const line = buffer[start..end];
-            start = end + 1;
-
-            // Skip empty lines
-            if (line.len == 0 or std.mem.eql(u8, std.mem.trim(u8, line, " \t\r"), "")) {
-                continue;
-            }
-
-            // Trim whitespace
-            const trimmed_cmd = try allocator.dupe(u8, std.mem.trim(u8, line, " \t\r"));
-
-            const age = std.math.mul(i64, @intCast(count - index - 1), 60) catch return error.HistoryTooLarge;
-            const timestamp = base_timestamp -| age;
-
-            entries[index] = HistoryEntry{
-                .cmd = trimmed_cmd,
-                .timestamp = timestamp,
-            };
-            index += 1;
-        }
+    for (commands.items, entries, 0..) |cmd, *entry, index| {
+        const age = std.math.mul(i64, @intCast(count - index - 1), 60) catch return error.HistoryTooLarge;
+        entry.* = .{ .cmd = cmd, .timestamp = base_timestamp -| age };
     }
-
-    allocator.free(buffer);
+    // Every command is now owned by entries.
+    commands.clearRetainingCapacity();
 
     return .{ .entries = entries, .count = count };
-}
-
-/// Check if a duplicate entry exists in the database
-pub fn isDuplicate(db: *sqlite.Db, cmd: []const u8, cwd: []const u8, timestamp: i64) !bool {
-    const query =
-        \\SELECT COUNT(*) FROM history
-        \\WHERE cmd = ? AND cwd = ? AND timestamp = ?
-    ;
-
-    var stmt = try db.prepare(query);
-    defer stmt.deinit();
-
-    var iter = try stmt.iterator(i64, .{
-        .cmd = cmd,
-        .cwd = cwd,
-        .timestamp = timestamp,
-    });
-    const count = (try iter.next(.{})) orelse return false;
-
-    return count > 0;
 }
 
 /// JSON entry structure for batch import
@@ -252,18 +216,19 @@ fn importFile(
     };
 }
 
-/// Import history entries into the database
-/// Returns the number of entries imported
+pub const PSReadLineImportResult = struct {
+    total: usize,
+    imported: usize,
+    skipped: usize,
+};
+
+/// Import the default PowerShell history file into the database.
 pub fn importHistory(
     db: *sqlite.Db,
     cwd: []const u8,
     allocator: std.mem.Allocator,
     io: std.Io,
-) !struct {
-    total: usize,
-    imported: usize,
-    skipped: usize,
-} {
+) !PSReadLineImportResult {
     // Get history file path
     const history_path = getHistoryPath(allocator, io) catch |err| {
         std.debug.print("Error finding PowerShell history file: {}\n", .{err});
@@ -275,9 +240,27 @@ pub fn importHistory(
     defer allocator.free(history_path);
 
     std.debug.print("Reading history from: {s}\n", .{history_path});
+    return importHistoryFile(db, history_path, cwd, allocator, io, true);
+}
 
+/// Counts stored rows for an exact command. The NOCASE comparison lets SQLite
+/// narrow the search with idx_cmd_prefix before the exact (binary) comparison.
+pub const existing_count_sql = "SELECT COUNT(*) FROM history WHERE cmd = ? COLLATE NOCASE AND cmd = ?";
+
+/// Import a PSReadLine history file. The file has no timestamps, so occurrences
+/// are reconciled per command: when history already holds N rows for a command,
+/// whether from an earlier import or from live recording, the first N occurrences
+/// in the file are treated as present. Re-importing is therefore idempotent.
+pub fn importHistoryFile(
+    db: *sqlite.Db,
+    path: []const u8,
+    cwd: []const u8,
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    report_progress: bool,
+) !PSReadLineImportResult {
     // Open and parse history file – std.fs.cwd() removed in Zig 0.16.
-    const file = try std.Io.Dir.cwd().openFile(io, history_path, .{});
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
     defer file.close(io);
 
     const parsed = try parseHistoryFile(allocator, io, file);
@@ -288,15 +271,18 @@ pub fn importHistory(
         allocator.free(entries);
     }
 
-    std.debug.print("Found {} commands in history file\n", .{count});
+    if (report_progress) std.debug.print("Found {} commands in history file\n", .{count});
 
-    // Import entries, skipping duplicates
     var imported: usize = 0;
     var skipped: usize = 0;
 
-    // Use batch insertion for better performance
     var writer = try record.Writer.init(db);
     defer writer.deinit();
+    var existing_stmt = try db.prepare(existing_count_sql);
+    defer existing_stmt.deinit();
+    // Remaining stored rows for each command that file occurrences still match.
+    var already_stored: std.StringHashMapUnmanaged(usize) = .empty;
+    defer already_stored.deinit(allocator);
 
     // Generate a single session ID for all imported commands
     const session_id = "imported-session";
@@ -309,17 +295,19 @@ pub fn importHistory(
     defer allocator.free(hostname);
 
     // Display progress
-    const progress_interval = if (count / 20 > 1) count / 20 else 1; // Update progress ~20 times
+    const progress_interval = @max(count / 20, 1); // Update progress ~20 times
+    // Counts are read inside the write transaction, so concurrent recordings cannot race.
     try db.exec("BEGIN IMMEDIATE", .{}, .{});
     errdefer record.rollback(db);
     const now = std.Io.Timestamp.now(io, .real).toSeconds();
 
-    for (entries[0..count], 0..) |entry, index| {
-        // Check for duplicates
-        if (try isDuplicate(db, entry.cmd, cwd, entry.timestamp)) {
+    for (entries, 0..) |entry, index| {
+        const stored = try already_stored.getOrPut(allocator, entry.cmd);
+        if (!stored.found_existing) stored.value_ptr.* = try countStored(&existing_stmt, entry.cmd);
+        if (stored.value_ptr.* > 0) {
+            stored.value_ptr.* -= 1;
             skipped += 1;
         } else {
-            // Insert entry
             _ = try writer.record(.{
                 .cmd = entry.cmd,
                 .cwd = cwd,
@@ -333,7 +321,7 @@ pub fn importHistory(
         }
 
         // Display progress
-        if (index % progress_interval == 0 or index == count - 1) {
+        if (report_progress and (index % progress_interval == 0 or index == count - 1)) {
             const progress_percent = @as(f64, @floatFromInt(index + 1)) / @as(f64, @floatFromInt(count)) * 100.0;
             std.debug.print("\rProgress: {d:.1}% ({}/{d}) - Imported: {}, Skipped: {}", .{
                 progress_percent,
@@ -345,7 +333,7 @@ pub fn importHistory(
         }
     }
 
-    std.debug.print("\n", .{}); // New line after progress
+    if (report_progress) std.debug.print("\n", .{}); // New line after progress
 
     try db.exec("COMMIT", .{}, .{});
 
@@ -354,4 +342,10 @@ pub fn importHistory(
         .imported = imported,
         .skipped = skipped,
     };
+}
+
+fn countStored(stmt: anytype, cmd: []const u8) !usize {
+    defer stmt.reset();
+    var rows = try stmt.iterator(i64, .{ cmd, cmd });
+    return @intCast((try rows.next(.{})) orelse 0);
 }

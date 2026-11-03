@@ -40,12 +40,10 @@ pub fn recalcRanks(params: RecalcParams, allocator: std.mem.Allocator, io: std.I
     }
 
     // Backfill cmd_hash for existing entries if needed
-    std.debug.print("\nAbout to call backfillCmdHashes...\n", .{});
     if (params.verbose) {
         std.debug.print("Checking for missing cmd_hash values...\n", .{});
     }
-    try ranking.backfillCmdHashes(&db, allocator);
-    std.debug.print("BackfillCmdHashes completed.\n", .{});
+    try ranking.backfillCmdHashes(&db, allocator, params.verbose);
 
     try db.exec("BEGIN IMMEDIATE", .{}, .{});
     errdefer zigstory.record.rollback(&db);
