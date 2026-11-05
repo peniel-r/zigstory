@@ -107,6 +107,14 @@ function Global:Get-ZigstoryRecordingDirectory {
 }
 
 function Global:Start-ZigstoryRecordingImport([string]$Path) {
+    $launcher = 'zigstoryPredictor.RecordingImporter' -as [type]
+    if ($null -ne $launcher) {
+        Initialize-ZigstoryRecordingExit
+        $operation = $launcher::Start($Global:ZigstoryBin, $Path)
+        $Global:ZigstoryRecordingProcesses.Add([pscustomobject]@{ Operation = $operation; Path = $Path })
+        return
+    }
+    # Recording-only installations without the helper retain direct launch.
     $process = [Diagnostics.Process]::new()
     try {
         $process.StartInfo = [Diagnostics.ProcessStartInfo]::new()
@@ -132,11 +140,35 @@ function Global:Start-ZigstoryRecordingImport([string]$Path) {
     }
 }
 
+function Global:Initialize-ZigstoryRecordingExit {
+    $subscription = Get-Variable -Name ZigstoryRecordingExitSubscription -Scope Global -ValueOnly -ErrorAction SilentlyContinue
+    if ($null -ne $subscription -and (Get-EventSubscriber -SubscriptionId $subscription -Force -ErrorAction SilentlyContinue)) { return }
+    # Register once before submitting any background launch. Normal exit waits
+    # for launch, not import completion; force termination retains retry payloads.
+    Register-EngineEvent -SourceIdentifier PowerShell.Exiting -SupportEvent -Action {
+        if (-not [zigstoryPredictor.RecordingImporter]::WaitForPendingLaunches(10000)) {
+            Write-Warning 'zigstory importer launch did not finish before exit; pending payloads can be retried.'
+        }
+    }
+    $Global:ZigstoryRecordingExitSubscription = (Get-EventSubscriber -SourceIdentifier PowerShell.Exiting -Force |
+        Sort-Object SubscriptionId -Descending | Select-Object -First 1).SubscriptionId
+}
+
 function Global:Complete-ZigstoryRecordings {
     [CmdletBinding()]
     param()
     for ($i = $Global:ZigstoryRecordingProcesses.Count - 1; $i -ge 0; $i--) {
         $recording = $Global:ZigstoryRecordingProcesses[$i]
+        if ($null -ne $recording.PSObject.Properties['Operation']) {
+            if (-not $recording.Operation.Completion.IsCompleted) { continue }
+            try {
+                $result = $recording.Operation.Completion.GetAwaiter().GetResult()
+                if (-not $result.Success) {
+                    Write-Warning "zigstory recording failed. Payload: $($recording.Path); diagnostic: $($recording.Path).error. Run Retry-ZigstoryPendingRecordings after resolving the error."
+                }
+            } finally { $Global:ZigstoryRecordingProcesses.RemoveAt($i) }
+            continue
+        }
         if (-not $recording.Process.HasExited) { continue }
         try {
             $detail = $recording.ErrorTask.GetAwaiter().GetResult()

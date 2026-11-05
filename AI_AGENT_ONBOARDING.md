@@ -131,7 +131,8 @@ zigstory/
 PSReadLine acceptance hook → capture starting directory (preserve prior handler)
 Prompt → snapshot $? / native exit code and history execution time/duration
   └─ Write event JSON to %USERPROFILE%\.zigstory\pending (shell session/event IDs)
-  └─ Process.Start → zigstory import --file <payload> --consume
+  └─ RecordingImporter.Start → .NET worker → Process.Start
+       └─ zigstory import --file <payload> --consume
        └─ cli/consume.zig → initialize DB, import, delete payload on success
        └─ cli/import.zig → db/record.zig Writer (one atomic transaction)
             ├─ INSERT history ON CONFLICT(event_id) DO NOTHING
@@ -140,6 +141,14 @@ Prompt → snapshot $? / native exit code and history execution time/duration
        └─ Failure → retain payload + .error diagnostic; prompt warns
   └─ Retry-ZigstoryPendingRecordings → explicitly retry idempotent events
 ```
+
+Payload writing remains synchronous and immediate; process creation is offloaded
+only when the helper DLL is loaded. A recording-only installation without it uses
+the previous direct launch path. Operations snapshot environment/cwd/executable,
+drain child streams without retaining their contents, and persist failures.
+`PowerShell.Exiting` waits up to ten seconds for pending launches, not full imports.
+Abrupt termination or an exit timeout leaves payloads for explicit retry. The
+prompt completion hook supports both legacy Process handles and worker operations.
 
 ### Interactive Search (`search` → TUI)
 

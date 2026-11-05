@@ -468,11 +468,25 @@ published predictor DLLs.
 
 ### Recording recovery
 
-The hook immediately writes one JSON event to `%USERPROFILE%\.zigstory\pending`
-and starts the importer directly, without `cmd.exe` or a batching delay. Successful
+The hook immediately writes one JSON event to `%USERPROFILE%\.zigstory\pending`.
+When the current predictor/helper DLL is available, a .NET worker starts its
+importer without blocking the prompt on `Process.Start`; there is still one
+importer per event, with no `cmd.exe`, timer, batching, or persistent writer.
+Recording-only installations without that helper retain the direct launch path.
+Normal PowerShell exit waits up to ten seconds for pending process launches, not
+for imports to finish. Abrupt termination (or a launch timeout) leaves durable
+payloads for explicit retry. Executable, environment and working directory are
+snapshotted at submission so later commands cannot change a queued import's
+destination. Successful
 imports delete their own payload, even if the shell exits. Failures retain the
 payload and a neighboring `.error` diagnostic; the next prompt reports failed
 children, and a new session warns about outstanding payloads.
+
+Worker launch failures retain their payload and `.error` diagnostic; failures
+reported by the Zig importer preserve its own more specific diagnostic. Worker
+logs contain static identifiers and error codes, never process output or command
+text. Completing operations are checked on subsequent prompts; re-sourcing the
+profile handles both direct and worker-launched operations.
 
 After resolving a missing executable, database lock, or other reported issue:
 

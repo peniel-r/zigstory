@@ -1,8 +1,15 @@
 # zigstory — Functional Tests
 
-This folder contains the PowerShell 7 functional, JSON, recording, safe-upgrade and
-logging regression suites. The runner executes all five; Zig core/TUI and predictor
-tests run separately.
+This folder contains the PowerShell 7 functional, JSON, recording, asynchronous
+recording, safe-upgrade and logging regression suites. The runner executes all six;
+Zig core/TUI and predictor tests run separately.
+
+The runner also runs `async_recording_regressions.ps1`: it publishes a fresh helper
+to a private fixture, loads it only in child shells, and checks worker imports,
+launch failures, retry, preserved importer diagnostics, mixed direct/worker
+tracking, exit-drain registration and a real shell exiting immediately after
+submission. It measures the warm PowerShell recording helper including JSON and
+payload writing, but excludes user prompt rendering.
 
 ## Prerequisites
 
@@ -121,6 +128,10 @@ test-framework packages:
 dotnet run --project tests\predictor\PredictorRegressionTests.csproj -c Release
 # Optional 100,000-row warm query benchmark (median of 21 runs)
 dotnet run --project tests\predictor\PredictorRegressionTests.csproj -c Release -- --benchmark
+
+# Isolated per-event launch benchmark: submission, actual launch, full import,
+# and direct Process.Start blocking (21 warm samples; no user history touched).
+dotnet run --project tests\predictor\PredictorRegressionTests.csproj -c Release -- --recording-benchmark "$PWD\zig-out\bin\zigstory.exe"
 ```
 
 These check cache freshness after committed writes/rank changes, stable suggestion
@@ -246,3 +257,9 @@ assembly loading or establish an end-to-end first-keystroke latency guarantee.
 `--benchmark` also compares text-index and rank-index queries on 400-match
 prefixes and a broad 100k-match prefix. Production probes up to 1,024 candidates
 before choosing rank-first, so moderately selective prefixes use the text index.
+
+The helper regression harness deterministically blocks process creation on a
+worker and verifies submission has already returned, the exit drain sees it, and
+request-time environment/arguments survive later changes. Worker failure tests
+check privacy and durable diagnostics; the existing recording suite continues to
+exercise the recording-only fallback with no helper DLL loaded.

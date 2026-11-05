@@ -38,10 +38,18 @@ if (args.Length > 0 && args[0] == "--profile")
     return;
 }
 
+if (args.Length > 0 && args[0] == "--recording-benchmark")
+{
+    if (args.Length != 2) throw new ArgumentException("Usage: --recording-benchmark <zigstory.exe>");
+    await RecordingChecks.Benchmark(Path.GetFullPath(args[1]));
+    return;
+}
+
 var directory = Path.Combine(Path.GetTempPath(), $"zigstory_predictor_{Guid.NewGuid():N}");
 Directory.CreateDirectory(directory);
 try
 {
+    await RecordingChecks.Run(directory);
     var savedLogDirectory = Environment.GetEnvironmentVariable("ZIGSTORY_LOG_DIR");
     var savedLogLevel = Environment.GetEnvironmentVariable("ZIGSTORY_LOG_LEVEL");
     try

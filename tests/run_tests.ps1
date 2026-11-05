@@ -23,6 +23,8 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & pwsh -NoProfile -File "$here\recording_regressions.ps1"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& pwsh -NoProfile -File "$here\async_recording_regressions.ps1"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & pwsh -NoProfile -File "$here\upgrade_regressions.ps1"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & pwsh -NoProfile -File "$here\logging_regressions.ps1"

@@ -385,3 +385,48 @@ was benchmarked before accepting the change, without relaxing any budgets.
 `zig build run -Doptimize=ReleaseFast` succeeded. Quick-pass changes are not
 installed. The user approved committing this pass on November 5, before moving
 to the prompt-launch fix and then the schema stage.
+
+## Prompt-launch fix (November 5, 2026)
+
+Quick performance/cleanup committed as `286756a` with user approval. No push,
+merge or deployment requested. Implement this stage separately from schema work.
+
+- [x] Start each importer on a .NET worker instead of blocking the prompt on
+  Process.Start. Snapshot executable, environment and working directory at request
+  time; keep immediate durable payload writes and one importer per event.
+- [x] Keep launch/import failures recoverable after the originating shell closes.
+  On normal PowerShell exit, wait only for pending launches, not complete imports.
+  Abrupt process termination still leaves payloads for explicit retry.
+- [x] Preserve direct launch for recording-only installations without the helper,
+  and handle mixed old/new operations when the profile is sourced again.
+- [x] Test prompt nonblocking behavior with a deterministically blocked launcher,
+  actual imports/failures/retries, normal shell exit, diagnostics privacy, and
+  clean published-helper loading; measure request submission separately from
+  launch and full import. Run all suites and `zig build run` before review.
+
+Engram status/impact were attempted again and are still unsupported.
+
+Validation: 39/39 Zig tests passed in Debug and ReleaseFast; 321 PowerShell
+checks passed with zero failures (same five functional skips), including the
+fresh-package async recording suite, clean child-shell exit, retry, mixed tracking,
+upgrades/rollback/bundles and logging. The .NET suite passed 39 checks, including
+nine deterministic launcher tests. Four ConPTY scenarios, all existing synthetic
+performance gates, formatting/diff checks, and `zig build run -Doptimize=ReleaseFast`
+passed. No installed files, user history, or persistent schema were changed.
+
+Warm local launch benchmark, 21 samples: .NET submission median/p95 0.069/0.092 ms
+vs direct Process.Start blocking 42.77/55.53 ms; actual worker launch median
+41.45 ms, full import 139.29 ms. The PowerShell recording helper including JSON,
+payload writing and exit-drain checks measured 1.98 ms median / 2.68 ms p95. These
+exclude initial assembly/JIT loading and user prompt rendering, and are not an
+end-to-end shell latency guarantee. Recording remains immediate per event.
+
+The user approved committing the prompt stage on November 5 and starting the
+schema stage next. No push, merge or deployment was requested.
+
+A follow-up async suite run also passed with spaces, ampersand and apostrophe in
+the recording home/payload paths (PowerShell submission median/p95 2.10/2.98 ms).
+The SDK 10.0.403 publish command rejected an experimental staging path containing
+an ampersand (MSB3094); publish staging uses the existing safe GUID path instead.
+That SDK/publishing-path edge case is separate from importer argument handling and
+remains a follow-up; normal generated staging and bundle/rollback tests pass.
