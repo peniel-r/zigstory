@@ -1,5 +1,9 @@
 # Design Document: `zigstory` (Zig History Manager)
 
+> Historical design draft. For the current implementation and validation, see
+> `README.md` and root `PLAN.md`; the examples below predate durable recording,
+> paged substring search, and Zig 0.16.
+
 **Status:** Draft
 **Target Shell:** PowerShell 7+
 **Core Tech:** Zig 0.15.2+, SQLite 3, .NET 8 (Adapter only)

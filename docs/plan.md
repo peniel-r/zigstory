@@ -1,5 +1,9 @@
 # `zigstory` Development Roadmap
 
+> Historical phase-by-phase roadmap. Root `PLAN.md` tracks current implementation,
+> review and validation; `FUTURE.md` collects feature ideas. Older examples and
+> performance targets below are not the current release contract.
+
 **Project:** Zig History Manager  
 **Reference:** docs/architecture.md  
 **Status:** Implementation Plan  

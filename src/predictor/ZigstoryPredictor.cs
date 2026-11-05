@@ -32,7 +32,10 @@ public class ZigstoryPredictor : ICommandPredictor, IDisposable
         WHERE cmd LIKE @pattern ESCAPE '\'
         ORDER BY rank DESC, timestamp DESC 
         LIMIT 5";
-    private const int CandidateLimit = 128;
+    // Moderately selective prefixes (e.g. 400 matching history rows) can be very
+    // expensive via the rank index on a fresh connection. Bound the text-index
+    // probe at 1024; truly broad prefixes still use the fast rank-first plan.
+    private const int CandidateLimit = 1024;
     private const string CandidateCountQuery = @"
         SELECT COUNT(*) FROM (
             SELECT 1 FROM history WHERE cmd LIKE @pattern ESCAPE '\' LIMIT @limit)";
@@ -54,6 +57,32 @@ public class ZigstoryPredictor : ICommandPredictor, IDisposable
     {
         _dbManager = new DatabaseManager(dbPath, maxPoolSize: 1);
     }
+
+    /// <summary>
+    /// Opens the read-only history connection on a worker thread. Optional: normal
+    /// predictions still initialize lazily. Uses the same gate as queries/disposal
+    /// so no connection is used concurrently or reopened after disposal.
+    /// </summary>
+    public Task WarmUpAsync(CancellationToken cancellationToken = default) => Task.Run(() =>
+    {
+        try
+        {
+            _requestGate.Wait(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return; }
+        try
+        {
+            if (_disposed || cancellationToken.IsCancellationRequested) return;
+            var connection = _dbManager.GetConnection();
+            _dbManager.ReturnConnection(connection);
+        }
+        catch (SqliteException)
+        {
+            // History may not exist yet. Do not log on every shell startup;
+            // GetSuggestion retries normally and emits the usual diagnostic.
+        }
+        finally { _requestGate.Release(); }
+    });
 
     public SuggestionPackage GetSuggestion(
         PredictionClient client,
@@ -184,6 +213,7 @@ public class ZigstoryPredictor : ICommandPredictor, IDisposable
             _disposed = true;
             _resultCache.Clear();
             _cacheConnection = null;
+            _cacheDataVersion = null;
             _dbManager.Dispose();
         }
         finally

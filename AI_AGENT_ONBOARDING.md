@@ -58,6 +58,11 @@
 | `zig-sqlite` (`vrischmann`) | `3.48.0` · `fb73a6c` | SQLite bindings with FTS5 enabled |
 | `libvaxis` (`rockorager`) | `0.6.0` · `60a507c` | TUI rendering, terminal I/O, keyboard events |
 
+The predictor compiles against `System.Management.Automation` 7.4.6 but uses the
+host PowerShell runtime after publishing. Only the standalone regression harness
+depends on the full PowerShell SDK. The profile starts optional read-only
+`WarmUpAsync` after registration; warm-up shares the prediction/disposal gate.
+
 ### System Libraries (Windows)
 
 | Library | Usage |
@@ -142,13 +147,12 @@ Prompt → snapshot $? / native exit code and history execution time/duration
 zigstory search
   └─ tui/main.zig  TuiApp.init
        ├─ vaxis.Tty.init / vaxis.init / vaxis.Loop.init
-       ├─ scrolling.getHistoryCount  →  total_count
-       └─ scrolling.fetchHistoryPage →  initial results
+       └─ SearchState.loadPage → initial results and total_count
   └─ TuiApp.run  (event loop)
        ├─ vaxis.enterAltScreen / queryTerminal
        ├─ loop.pollEvent / loop.tryEvent
        ├─ handleEvent
-       │    ├─ Text input  →  SearchState.performSearch (LIKE query)
+       │    ├─ Text input  →  queued edits → SearchState.loadPage (LIKE query)
        │    ├─ Ctrl+F      →  directory_filter.toggleMode
        │    ├─ Ctrl+U      →  clear search query
        │    ├─ ↑↓ / Ctrl+P/N →  navigation.NavigationState.handleKey (letters always edit the query)
@@ -167,7 +171,6 @@ rank = (frequency × frequency_weight)
 Defaults:
   frequency_weight = 2.0
   recency_weight   = 100.0
-  max_days         = 365
 ```
 
 ---

@@ -18,7 +18,6 @@ public sealed class LruCache<TKey, TValue> where TKey : notnull
     {
         public TKey Key;
         public TValue Value;
-        public long Timestamp;
     }
 
     public LruCache(int capacity)
@@ -65,15 +64,8 @@ public sealed class LruCache<TKey, TValue> where TKey : notnull
             {
                 // Update existing entry
                 _lruList.Remove(existingNode);
-                var entry = new CacheEntry 
-                { 
-                    Key = key, 
-                    Value = value,
-                    Timestamp = Environment.TickCount64
-                };
-                var newNode = new LinkedListNode<CacheEntry>(entry);
-                _lruList.AddFirst(newNode);
-                _cache[key] = newNode;
+                existingNode.Value = new CacheEntry { Key = key, Value = value };
+                _lruList.AddFirst(existingNode);
                 return;
             }
 
@@ -92,8 +84,7 @@ public sealed class LruCache<TKey, TValue> where TKey : notnull
             var newEntry = new CacheEntry 
             { 
                 Key = key, 
-                Value = value,
-                Timestamp = Environment.TickCount64
+                Value = value
             };
             var node = new LinkedListNode<CacheEntry>(newEntry);
             _lruList.AddFirst(node);

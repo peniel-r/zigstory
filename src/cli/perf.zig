@@ -13,15 +13,6 @@ pub const PerfMetrics = struct {
     last_exit_code: i32,
 };
 
-pub const PerfMetricsJson = struct {
-    avg_duration_ms: f64,
-    last_duration_ms: i64,
-    last_cmd: []const u8,
-    success_rate: f64,
-    total_commands: i64,
-    last_exit_code: i32,
-};
-
 /// Run performance metrics command
 pub fn run(db: *sqlite.Db, cwd_param: ?[]const u8, format_param: []const u8, threshold_param: i64, allocator: std.mem.Allocator, io: std.Io) !void {
     // std.process.getCwdAlloc was removed in Zig 0.16; use currentPathAlloc with Io.

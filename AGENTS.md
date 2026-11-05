@@ -23,7 +23,7 @@ This guide provides AI agents with a structured workflow for integrating with En
 - Never use global variables for large structs
 - Use `ArenaAllocator` for frame-scoped data
 - Use `PoolAllocator` for background tasks
-- Target Zig version 0.15.2+
+- Target Zig 0.16.0 (the pinned dependencies are not yet compatible with 0.17)
 - Prefer `ArrayListUnmanaged` for array list implementation
 
 ---

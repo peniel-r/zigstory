@@ -1,5 +1,9 @@
 # Performance Optimization: Batch Writes and Command Filtering
 
+> Historical investigation, not the current recording design. The current hook
+> records immediately with durable per-event payloads and no timer/batching.
+> See root `README.md` and `PLAN.md` for current behavior and measured budgets.
+
 ## Problem
 
 When loading the PowerShell profile (`scripts/zsprofile.ps1`), the prompt was experiencing significant delays after executing commands. This was caused by:

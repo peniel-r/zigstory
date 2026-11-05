@@ -333,3 +333,55 @@ or commit new implementation passes without review.
 4. Schema change: prototype distinct-command storage, substring indexing and
    time-invariant decay; verify migration, rollback/version compatibility,
    directory-scoped semantics and query performance before changing production SQL.
+
+### Quick performance and cleanup implementation
+
+Bug fixes committed as `e21d0c5`; user-approved deployment was confirmed before
+the commit. No push, merge, or further deployment is authorized.
+
+- [x] Skip expensive PSReadLine disk discovery when the module is already loaded.
+- [x] Replace the published full PowerShell SDK with a compile-only reference to
+  its host-provided automation assembly; keep SDK runtime assets in the test host.
+  Fresh publish/load/register/native SQLite check: 8 files / 1.90 MiB (was 312
+  files / 50.6 MiB). Upgrade tests enforce no shell assemblies and <10 MiB.
+- [x] Add optional background read-only connection warm-up on profile registration;
+  synchronize with queries/disposal and tolerate missing history without creating
+  it. Test concurrency, cancellation, retry and post-disposal behavior.
+- [x] Reuse LRU nodes on updates; remove unused timestamps.
+- [x] Benchmark moderately selective predictor prefixes and raise the bounded
+  text-index probe from 128 to 1,024 candidates. A 400-row-match prefix benchmark
+  changed from ~16 ms rank-first to ~0.08 ms adaptive; broad-prefix rank-first
+  behavior is retained with bounded extra probe cost.
+- [x] Consolidate database paths/opening for all CLI commands and recording
+  consumption. `stats` now initializes a missing history directory.
+- [x] Remove confirmed unused raw writer/pool, rank query/update helpers, paging
+  helpers and invalid directory-filter helpers. Preserve useful assertions from
+  five unwired pre-0.16 test files in the active suite before removing old files.
+- [x] Correct supported compiler/phase docs; mark historical architecture/batching
+  documents explicitly historical. Normalize remaining Zig formatting.
+- [x] Full regression, publish/upgrade and performance validation; required app run.
+
+Cold-start caveat: background warm-up moves connection opening off the input
+path only if completed before input; it does not eliminate remaining JIT cost.
+First-frame terminal negotiation and incremental TUI narrowing are not included
+in this small pass: capability negotiation changes terminal lifecycle behavior,
+and cache narrowing needs exact invalidation/filter semantics. Keep them separate
+from the approved prompt and persistent-schema work rather than expanding this diff.
+
+Engram `status` and `impact` were retried before edits and remain unsupported by
+the installed executable. No real history or installed components are modified.
+
+Validation: 39/39 Zig tests passed in Debug and ReleaseFast, 307 PowerShell checks
+passed (same five functional skips), 30 predictor checks and four ConPTY scenarios
+passed. Fresh slim-package native SQLite/loading/registration, isolated upgrade,
+rollback and bundle checks all passed. `zig fmt --check src build.zig` and tracked
+diff checks passed. `just performance` passed unchanged budgets plus the new
+post-warm-up gate: cold-connection predictor p95 12.81 ms, post-warm-up 7.00 ms,
+cached 0.095 ms; substring median/p95 32.41/42.41 ms, deep-page median 0.041 ms,
+headless frame p95 2.03 ms. These are warm synthetic/local host measurements,
+not an initial assembly-load or first-keystroke SLA. The first run exposed a
+119.69 ms cold-request p95 with the old 128-candidate probe; threshold adjustment
+was benchmarked before accepting the change, without relaxing any budgets.
+`zig build run -Doptimize=ReleaseFast` succeeded. Quick-pass changes are not
+installed. The user approved committing this pass on November 5, before moving
+to the prompt-launch fix and then the schema stage.

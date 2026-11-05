@@ -1,7 +1,6 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
 const scrolling = @import("scrolling.zig");
-const search_logic = @import("search.zig");
 
 /// Navigation action result
 pub const NavigationAction = enum {

@@ -92,6 +92,8 @@ try
           (7,'C:\tools\run',1,7);
         """);
     using var predictor = new ZigstoryPredictor(path);
+    await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => predictor.WarmUpAsync()));
+    Check(Text(Get(predictor, "git")).SequenceEqual(["git log", "git status"]), "Concurrent background warm-ups leave predictions correct");
     Check(Get(predictor, "g").SuggestionEntries is null, "Short input avoids prediction queries");
     var first = Get(predictor, "git");
     Check(Text(first).SequenceEqual(["git log", "git status"]), "Predictions preserve frecency ordering");
@@ -161,10 +163,33 @@ try
             """);
         var releasing = new ZigstoryPredictor(releasePath);
         Check(Text(Get(releasing, "git")).SequenceEqual(["git status"]), "Predictor reads history before disposal");
+        await Task.WhenAll(releasing.WarmUpAsync(), Task.Run(releasing.Dispose));
         releasing.Dispose();
+        await releasing.WarmUpAsync();
     }
     try { File.Delete(releasePath); } catch (IOException) { }
     Check(!File.Exists(releasePath), "Disposing the predictor releases the history database file");
+    var warmPath = Path.Combine(directory, "warm-retry.db");
+    using (var warming = new ZigstoryPredictor(warmPath))
+    {
+        await warming.WarmUpAsync(); // Missing database: startup warm-up must be harmless.
+        Check(!File.Exists(warmPath), "Background warm-up does not create missing history");
+        using (var warmWriter = OpenDatabase(warmPath))
+        {
+            Execute(warmWriter, "CREATE TABLE history(id INTEGER PRIMARY KEY,cmd TEXT,rank REAL,timestamp INTEGER); INSERT INTO history VALUES(1,'git warm',1,1)");
+            Check(Text(Get(warming, "git")).SequenceEqual(["git warm"]), "Predictions retry successfully after an unavailable warm-up");
+        }
+        using var cancelledWarm = new CancellationTokenSource();
+        cancelledWarm.Cancel();
+        await warming.WarmUpAsync(cancelledWarm.Token);
+        Check(Text(Get(warming, "git")).Length == 1, "Cancelled warm-up leaves the connection usable");
+    }
+    var cache = new LruCache<string, int>(2);
+    cache.Set("first", 1);
+    cache.Set("second", 2);
+    cache.Set("first", 3);
+    cache.Set("third", 4);
+    Check(cache.Count == 2 && cache.TryGet("first", out var cached) && cached == 3 && !cache.TryGet("second", out _), "LRU updates reuse nodes and preserve eviction ordering");
     if (args.Contains("--benchmark"))
     {
         var predictionQuery = typeof(ZigstoryPredictor)
@@ -188,6 +213,21 @@ try
             Check(Query(benchmark, bound, prefix + "%").SequenceEqual(oldResult), $"Benchmark output matches for '{prefix}'");
             Check(predictionQuery(benchmark, prefix, default).SequenceEqual(oldResult), $"Production query output matches for '{prefix}'");
             Console.WriteLine($"BENCH {prefix,-18} baseline={Measure(() => Query(benchmark, baseline, prefix)):F3}ms bound={Measure(() => Query(benchmark, bound, prefix + "%")):F3}ms adaptive={Measure(() => predictionQuery(benchmark, prefix, default)):F3}ms");
+        }
+        using var moderate = OpenDatabase(Path.Combine(directory, "moderate.db"));
+        Execute(moderate, """
+            CREATE TABLE history(id INTEGER PRIMARY KEY,cmd TEXT,rank REAL,timestamp INTEGER);
+            WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i < 100000)
+            INSERT INTO history SELECT i,printf('cmd %06d',i % 25000),i % 25000,i % 70000 FROM n;
+            CREATE INDEX idx_cmd_prefix ON history(cmd COLLATE NOCASE);
+            CREATE INDEX idx_rank ON history(rank DESC,timestamp DESC);
+            """);
+        foreach (var prefix in new[] { "cmd 0000", "cmd 0009", "cmd " })
+        {
+            const string ranked = "SELECT DISTINCT cmd FROM history WHERE cmd LIKE (@pattern || '') ESCAPE '\\' ORDER BY rank DESC,timestamp DESC LIMIT 5";
+            const string bound = "SELECT DISTINCT cmd FROM history WHERE cmd LIKE @pattern ESCAPE '\\' ORDER BY rank DESC,timestamp DESC LIMIT 5";
+            Check(Query(moderate, bound, prefix + "%").SequenceEqual(predictionQuery(moderate, prefix, default)), $"Moderate prefix output matches for '{prefix}'");
+            Console.WriteLine($"BENCH moderate {prefix,-10} ranked={Measure(() => Query(moderate, ranked, prefix + "%")):F3}ms bound={Measure(() => Query(moderate, bound, prefix + "%")):F3}ms adaptive={Measure(() => predictionQuery(moderate, prefix, default)):F3}ms");
         }
     }
     Console.WriteLine("Predictor regressions passed.");

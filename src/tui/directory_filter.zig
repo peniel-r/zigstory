@@ -1,5 +1,3 @@
-const std = @import("std");
-
 /// Filter mode for directory-based filtering
 pub const FilterMode = enum {
     /// Show all commands from all directories
@@ -38,37 +36,8 @@ pub const DirectoryFilterState = struct {
         };
     }
 
-    /// Get WHERE clause for SQL query based on current mode
-    pub fn getWhereClause(self: *const DirectoryFilterState, allocator: std.mem.Allocator) !?[]const u8 {
-        return switch (self.mode) {
-            .global => null,
-            .current_dir => {
-                if (self.current_dir) |_| {
-                    return try std.fmt.allocPrint(allocator, "cwd = ?", .{});
-                }
-                return null;
-            },
-        };
-    }
-
-    /// Get bind parameters for WHERE clause
-    pub fn getBindParams(self: *const DirectoryFilterState) ![]const anyerror {
-        return switch (self.mode) {
-            .global => &[_]anyerror{},
-            .current_dir => {
-                if (self.current_dir) |dir| {
-                    return &[_]anyerror{dir};
-                }
-                return &[_]anyerror{};
-            },
-        };
-    }
-
     /// Check if filter is active
     pub fn isActive(self: *const DirectoryFilterState) bool {
         return self.mode == .current_dir and self.current_dir != null;
     }
-
-    /// Deallocate resources (no-op - current_dir owned by caller)
-    pub fn deinit(_: *DirectoryFilterState, _: std.mem.Allocator) void {}
 };

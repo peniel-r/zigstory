@@ -60,6 +60,8 @@ internal static class HistoryProfiler
             if (prefixes.Count == 0) throw new InvalidOperationException("History has no usable prediction prefixes.");
             var client = new PredictionClient("local-profile", PredictionClientKind.Terminal);
             var coldTimes = new List<double>();
+            var warmedTimes = new List<double>();
+            var warmupTimes = new List<double>();
             var cachedTimes = new List<double>();
             foreach (var prefix in prefixes)
             {
@@ -70,6 +72,16 @@ internal static class HistoryProfiler
                     var elapsed = Stopwatch.StartNew();
                     predictor.GetSuggestion(client, context, CancellationToken.None);
                     coldTimes.Add(elapsed.Elapsed.TotalMilliseconds);
+                }
+                for (var i = 0; i < 3; i++)
+                {
+                    using var warmed = new ZigstoryPredictor(snapshot);
+                    var warmup = Stopwatch.StartNew();
+                    warmed.WarmUpAsync().GetAwaiter().GetResult();
+                    warmupTimes.Add(warmup.Elapsed.TotalMilliseconds);
+                    var elapsed = Stopwatch.StartNew();
+                    warmed.GetSuggestion(client, context, CancellationToken.None);
+                    warmedTimes.Add(elapsed.Elapsed.TotalMilliseconds);
                 }
                 using var cached = new ZigstoryPredictor(snapshot);
                 cached.GetSuggestion(client, context, CancellationToken.None);
@@ -96,6 +108,8 @@ internal static class HistoryProfiler
                 },
                 startup_phases = phaseSummaries,
                 prediction_connection_cold = Summary(coldTimes),
+                prediction_connection_warmup = Summary(warmupTimes),
+                prediction_after_connection_warmup = Summary(warmedTimes),
                 prediction_cached = Summary(cachedTimes),
                 tui_data_path = tuiJson.RootElement,
                 tui_process_sampled_peak_working_set_bytes = tui.PeakWorkingSet,

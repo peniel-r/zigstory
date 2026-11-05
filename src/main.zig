@@ -11,7 +11,6 @@ const tui = @import("tui/main.zig");
 const clipboard = @import("clipboard.zig");
 const help = @import("cli/help.zig");
 const stats = @import("cli/stats.zig");
-const ranking = zigstory.ranking;
 const recalc = @import("cli/recalc.zig");
 const perf = @import("cli/perf.zig");
 const selection = @import("cli/selection.zig");
@@ -27,6 +26,11 @@ pub const panic = vaxis.panic_handler;
 /// Returns a borrowed slice – do NOT free it.
 fn getHomeDir(environ_map: *std.process.Environ.Map) ?[]const u8 {
     return environ_map.get("USERPROFILE") orelse environ_map.get("HOME");
+}
+
+fn openDatabase(init: std.process.Init, allocator: std.mem.Allocator) !sqlite.Db {
+    const home = getHomeDir(init.environ_map) orelse return error.HomeDirectoryNotFound;
+    return zigstory.db.openUserDb(home, allocator, init.io);
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -64,29 +68,7 @@ fn run(init: std.process.Init, metrics: ?*timing.Metrics) !void {
                 allocator.free(args.cwd);
             }
 
-            const home_dir = getHomeDir(init.environ_map) orelse {
-                std.log.err("Could not determine home directory", .{});
-                std.process.exit(1);
-            };
-
-            const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
-            defer allocator.free(db_path);
-
-            // Ensure directory exists
-            const db_dir = std.fs.path.dirname(db_path) orelse ".";
-            std.Io.Dir.cwd().createDirPath(init.io, db_dir) catch |err| {
-                std.log.err("Error creating database directory: {}", .{err});
-                std.process.exit(1);
-            };
-
-            const db_path_z = try allocator.dupeZ(u8, db_path);
-            defer allocator.free(db_path_z);
-
-            // Initialize database
-            var db = zigstory.db.initDb(db_path_z) catch |err| {
-                std.log.err("Error initializing database: {}", .{err});
-                std.process.exit(1);
-            };
+            var db = try openDatabase(init, allocator);
             defer db.deinit();
 
             // Add command to history
@@ -103,29 +85,7 @@ fn run(init: std.process.Init, metrics: ?*timing.Metrics) !void {
             std.debug.print("Command added successfully\n", .{});
         },
         .search => |params| {
-            const home_dir = getHomeDir(init.environ_map) orelse {
-                std.log.err("Could not determine home directory", .{});
-                std.process.exit(1);
-            };
-
-            const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
-            defer allocator.free(db_path);
-
-            // Ensure directory exists
-            const db_dir = std.fs.path.dirname(db_path) orelse ".";
-            std.Io.Dir.cwd().createDirPath(init.io, db_dir) catch |err| {
-                std.log.err("Error creating database directory: {}", .{err});
-                std.process.exit(1);
-            };
-
-            const db_path_z = try allocator.dupeZ(u8, db_path);
-            defer allocator.free(db_path_z);
-
-            // Initialize database
-            var db = zigstory.db.initDb(db_path_z) catch |err| {
-                std.log.err("Error initializing database: {}", .{err});
-                std.process.exit(1);
-            };
+            var db = try openDatabase(init, allocator);
             defer db.deinit();
 
             // Get current working directory for filter
@@ -164,29 +124,7 @@ fn run(init: std.process.Init, metrics: ?*timing.Metrics) !void {
                 };
                 return;
             }
-            const home_dir = getHomeDir(init.environ_map) orelse {
-                std.log.err("Could not determine home directory", .{});
-                std.process.exit(1);
-            };
-
-            const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
-            defer allocator.free(db_path);
-
-            // Ensure directory exists
-            const db_dir = std.fs.path.dirname(db_path) orelse ".";
-            std.Io.Dir.cwd().createDirPath(init.io, db_dir) catch |err| {
-                std.log.err("Error creating database directory: {}", .{err});
-                std.process.exit(1);
-            };
-
-            const db_path_z = try allocator.dupeZ(u8, db_path);
-            defer allocator.free(db_path_z);
-
-            // Initialize database
-            var db = zigstory.db.initDb(db_path_z) catch |err| {
-                std.log.err("Error initializing database: {}", .{err});
-                std.process.exit(1);
-            };
+            var db = try openDatabase(init, allocator);
             defer db.deinit();
 
             // Get current working directory
@@ -215,22 +153,7 @@ fn run(init: std.process.Init, metrics: ?*timing.Metrics) !void {
             }
         },
         .stats => {
-            const home_dir = getHomeDir(init.environ_map) orelse {
-                std.log.err("Could not determine home directory", .{});
-                std.process.exit(1);
-            };
-
-            const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
-            defer allocator.free(db_path);
-
-            const db_path_z = try allocator.dupeZ(u8, db_path);
-            defer allocator.free(db_path_z);
-
-            // Initialize database
-            var db = zigstory.db.initDb(db_path_z) catch |err| {
-                std.log.err("Error initializing database: {}", .{err});
-                std.process.exit(1);
-            };
+            var db = try openDatabase(init, allocator);
             defer db.deinit();
 
             stats.run(&db, allocator, init.io) catch |err| {
@@ -239,29 +162,7 @@ fn run(init: std.process.Init, metrics: ?*timing.Metrics) !void {
             };
         },
         .list => |args| {
-            const home_dir = getHomeDir(init.environ_map) orelse {
-                std.log.err("Could not determine home directory", .{});
-                std.process.exit(1);
-            };
-
-            const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
-            defer allocator.free(db_path);
-
-            // Ensure directory exists
-            const db_dir = std.fs.path.dirname(db_path) orelse ".";
-            std.Io.Dir.cwd().createDirPath(init.io, db_dir) catch |err| {
-                std.log.err("Error creating database directory: {}", .{err});
-                std.process.exit(1);
-            };
-
-            const db_path_z = try allocator.dupeZ(u8, db_path);
-            defer allocator.free(db_path_z);
-
-            // Initialize database
-            var db = zigstory.db.initDb(db_path_z) catch |err| {
-                std.log.err("Error initializing database: {}", .{err});
-                std.process.exit(1);
-            };
+            var db = try openDatabase(init, allocator);
             defer db.deinit();
 
             // List entries
@@ -271,29 +172,7 @@ fn run(init: std.process.Init, metrics: ?*timing.Metrics) !void {
             };
         },
         .fzf => |params| {
-            const home_dir = getHomeDir(init.environ_map) orelse {
-                std.log.err("Could not determine home directory", .{});
-                std.process.exit(1);
-            };
-
-            const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
-            defer allocator.free(db_path);
-
-            // Ensure directory exists
-            const db_dir = std.fs.path.dirname(db_path) orelse ".";
-            std.Io.Dir.cwd().createDirPath(init.io, db_dir) catch |err| {
-                std.log.err("Error creating database directory: {}", .{err});
-                std.process.exit(1);
-            };
-
-            const db_path_z = try allocator.dupeZ(u8, db_path);
-            defer allocator.free(db_path_z);
-
-            // Initialize database
-            var db = zigstory.db.initDb(db_path_z) catch |err| {
-                std.log.err("Error initializing database: {}", .{err});
-                std.process.exit(1);
-            };
+            var db = try openDatabase(init, allocator);
             defer db.deinit();
 
             // Run fzf integration
@@ -319,22 +198,8 @@ fn run(init: std.process.Init, metrics: ?*timing.Metrics) !void {
             }
         },
         .recalc_rank => {
-            const home_dir = getHomeDir(init.environ_map) orelse {
-                std.log.err("Could not determine home directory", .{});
-                std.process.exit(1);
-            };
-
-            const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
-            defer allocator.free(db_path);
-
-            // Ensure directory exists
-            const db_dir = std.fs.path.dirname(db_path) orelse ".";
-            std.Io.Dir.cwd().createDirPath(init.io, db_dir) catch |err| {
-                std.log.err("Error creating database directory: {}", .{err});
-                std.process.exit(1);
-            };
-
-            const db_path_z = try allocator.dupeZ(u8, db_path);
+            const home_dir = getHomeDir(init.environ_map) orelse return error.HomeDirectoryNotFound;
+            const db_path_z = try zigstory.db.userDbPath(home_dir, allocator, init.io);
             defer allocator.free(db_path_z);
 
             // Recalculate ranks using CLI module
@@ -347,29 +212,7 @@ fn run(init: std.process.Init, metrics: ?*timing.Metrics) !void {
             };
         },
         .perf => |params| {
-            const home_dir = getHomeDir(init.environ_map) orelse {
-                std.log.err("Could not determine home directory", .{});
-                std.process.exit(1);
-            };
-
-            const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
-            defer allocator.free(db_path);
-
-            // Ensure directory exists
-            const db_dir = std.fs.path.dirname(db_path) orelse ".";
-            std.Io.Dir.cwd().createDirPath(init.io, db_dir) catch |err| {
-                std.log.err("Error creating database directory: {}", .{err});
-                std.process.exit(1);
-            };
-
-            const db_path_z = try allocator.dupeZ(u8, db_path);
-            defer allocator.free(db_path_z);
-
-            // Initialize database
-            var db = zigstory.db.initDb(db_path_z) catch |err| {
-                std.log.err("Error initializing database: {}", .{err});
-                std.process.exit(1);
-            };
+            var db = try openDatabase(init, allocator);
             defer db.deinit();
 
             // Run perf command with individual parameters (pass io for cwd resolution)
@@ -379,12 +222,7 @@ fn run(init: std.process.Init, metrics: ?*timing.Metrics) !void {
             };
         },
         .maintenance => {
-            const home_dir = getHomeDir(init.environ_map) orelse return error.HomeDirectoryNotFound;
-            const db_path = try std.fs.path.join(allocator, &.{ home_dir, ".zigstory", "history.db" });
-            const db_dir = std.fs.path.dirname(db_path) orelse ".";
-            try std.Io.Dir.cwd().createDirPath(init.io, db_dir);
-            const db_path_z = try allocator.dupeZ(u8, db_path);
-            var db = try zigstory.db.initDb(db_path_z);
+            var db = try openDatabase(init, allocator);
             defer db.deinit();
             zigstory.db.maintain(&db) catch |err| {
                 std.log.err("Error maintaining search index: {}", .{err});

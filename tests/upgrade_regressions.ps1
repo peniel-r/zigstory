@@ -114,6 +114,10 @@ try {
     $script:mode = 'success'
     $script:published = $publishedFixture
     & $realPublish $repo $script:published
+    $publishedFiles = @(Get-ChildItem -LiteralPath $script:published -File -Recurse)
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $script:published 'System.Management.Automation.dll')) -and
+        -not (Test-Path -LiteralPath (Join-Path $script:published 'Microsoft.PowerShell.SDK.dll'))) 'Predictor publish uses the host PowerShell runtime instead of shipping a shell SDK'
+    Assert-True (($publishedFiles | Measure-Object -Property Length -Sum).Sum -lt 10MB) 'Predictor publish stays below ten MiB including native SQLite'
     & $realPredictorValidation $script:published
     Assert-True $true 'Fresh publish loads and registers predictor with working native SQLite in a clean process'
     $sourceRepo = Join-Path $directory 'repository'

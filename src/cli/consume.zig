@@ -15,12 +15,7 @@ pub fn run(home: []const u8, path: []const u8, allocator: std.mem.Allocator, io:
 }
 
 fn consumePayload(home: []const u8, path: []const u8, error_path: []const u8, allocator: std.mem.Allocator, io: std.Io) !void {
-    const db_path = try std.fs.path.join(allocator, &.{ home, ".zigstory", "history.db" });
-    defer allocator.free(db_path);
-    try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(db_path).?);
-    const db_path_z = try allocator.dupeZ(u8, db_path);
-    defer allocator.free(db_path_z);
-    var db = try zigstory.db.initDb(db_path_z);
+    var db = try zigstory.db.openUserDb(home, allocator, io);
     defer db.deinit();
     const cwd = try std.process.currentPathAlloc(io, allocator);
     defer allocator.free(cwd);

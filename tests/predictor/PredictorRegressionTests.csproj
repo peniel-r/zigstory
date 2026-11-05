@@ -8,5 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\predictor\zigstoryPredictor.csproj" />
+    <!-- The console harness is not hosted by PowerShell, so it supplies its own runtime. -->
+    <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.4.6" />
   </ItemGroup>
 </Project>

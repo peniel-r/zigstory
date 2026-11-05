@@ -37,6 +37,7 @@ internal static class PerformanceChecks
             Require(root.GetProperty("history_rows").GetInt64() == 100000, "100k-row profile fixture");
             Below(root, "cli_startup_and_empty_perf", "p95_ms", 1000);
             Below(root, "prediction_connection_cold", "p95_ms", 50);
+            Below(root, "prediction_after_connection_warmup", "p95_ms", 50);
             Below(root, "prediction_cached", "p95_ms", 10);
             Below(root, "tui_data_path", "headless_frame_p95_ms", 50);
             var tui = root.GetProperty("tui_data_path");

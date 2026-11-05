@@ -80,6 +80,8 @@ try {
     New-Item -ItemType Directory -Path $reportHome | Out-Null
     $env:USERPROFILE = $reportHome
     $env:HOME = $reportHome
+    & $Global:ZigstoryBin stats > (Join-Path $reportHome 'first-stats.txt')
+    Assert-True ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath (Join-Path $reportHome '.zigstory\history.db'))) 'Stats initializes history on a first-time installation'
     $timestamp = 1700000000
     $reportCommand = "echo r`u{e9}port"
     $reportJson = Join-Path $reportHome 'report.json'

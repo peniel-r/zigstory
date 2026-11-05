@@ -17,6 +17,21 @@ const record = @import("record.zig");
 
 pub const schema_version = 2;
 
+/// Caller owns the returned path. All user-facing commands share the same
+/// directory creation policy, including stats on a first-time installation.
+pub fn userDbPath(home: []const u8, allocator: std.mem.Allocator, io: std.Io) ![:0]u8 {
+    const directory = try std.fs.path.join(allocator, &.{ home, ".zigstory" });
+    defer allocator.free(directory);
+    try std.Io.Dir.cwd().createDirPath(io, directory);
+    return std.fmt.allocPrintSentinel(allocator, "{s}{c}history.db", .{ directory, std.fs.path.sep }, 0);
+}
+
+pub fn openUserDb(home: []const u8, allocator: std.mem.Allocator, io: std.Io) !sqlite.Db {
+    const path = try userDbPath(home, allocator, io);
+    defer allocator.free(path);
+    return initDb(path);
+}
+
 /// Execute one or more SQL statements that produce no result rows.
 /// Wraps sqlite3_exec with a null callback.
 fn rawExec(db: *sqlite.Db, sql: [:0]const u8) !void {

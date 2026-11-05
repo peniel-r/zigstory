@@ -7,29 +7,9 @@ pub const FrecencyConfig = struct {
     frequency_weight: f64 = 2.0,
     /// Weight for recency component
     recency_weight: f64 = 100.0,
-    /// Maximum days to consider (prevents division by very small numbers)
-    max_days: i64 = 365,
 };
 
-/// Calculate frecency rank for a command
-/// Formula: rank = (frequency * weight) + (recency_weight / days_since_last_use)
-pub fn calculateFrecency(
-    frequency: i64,
-    last_used: i64,
-    config: FrecencyConfig,
-    current_time: i64,
-) f64 {
-    const seconds_since_last_use = current_time - last_used;
-    const days_since_last_use = @max(1, seconds_since_last_use / 86400);
-    const capped_days = @min(days_since_last_use, config.max_days);
-
-    const freq_score = @as(f64, @floatFromInt(frequency)) * config.frequency_weight;
-    const recency_score = config.recency_weight / @as(f64, @floatFromInt(capped_days));
-
-    return freq_score + recency_score;
-}
-
-/// Get SHA256 hash of a normalized command
+/// Get SHA256 hash of the exact command bytes (no normalization).
 pub fn getCommandHash(cmd: []const u8, allocator: std.mem.Allocator) ![]const u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update(cmd);
@@ -182,64 +162,6 @@ pub fn initRanking(db: *sqlite.Db) !void {
     try createCmdHashIndex(db);
 }
 
-/// Update command frequency and recency stats when a command is executed
-pub fn updateCommandStats(
-    db: *sqlite.Db,
-    cmd: []const u8,
-    cmd_hash: []const u8,
-    current_time: i64,
-) !void {
-    const query =
-        \\INSERT INTO command_stats (cmd_hash, cmd, frequency, last_used)
-        \\VALUES (?, ?, 1, ?)
-        \\ON CONFLICT(cmd_hash) DO UPDATE SET
-        \\    frequency = frequency + 1,
-        \\    last_used = MAX(last_used, ?);
-    ;
-
-    var stmt = try db.prepare(query);
-    defer stmt.deinit();
-
-    try stmt.exec(.{}, .{
-        cmd_hash,
-        cmd,
-        current_time,
-        current_time,
-    });
-}
-
-/// Calculate and update rank for a single history entry
-pub fn updateHistoryRank(
-    db: *sqlite.Db,
-    history_id: i64,
-    cmd_hash: []const u8,
-    config: FrecencyConfig,
-    io: std.Io,
-) !void {
-    // std.time.timestamp() removed in Zig 0.16 – use Io.Timestamp.
-    const current_time = std.Io.Timestamp.now(io, .real).toSeconds();
-    const query =
-        \\UPDATE history
-        \\SET rank = (
-        \\    SELECT (s.frequency * ?) + (? / MAX(1, (? - s.last_used) / 86400.0))
-        \\    FROM command_stats s
-        \\    WHERE s.cmd_hash = ?
-        \\)
-        \\WHERE id = ?
-    ;
-
-    var stmt = try db.prepare(query);
-    defer stmt.deinit();
-
-    try stmt.exec(.{}, .{
-        config.frequency_weight,
-        config.recency_weight,
-        current_time,
-        cmd_hash,
-        history_id,
-    });
-}
-
 /// Progress callback type
 pub const ProgressCallback = *const fn (usize, usize) void;
 
@@ -303,105 +225,4 @@ pub fn recalculateAllRanks(
             cb(@intCast(processed), @intCast(total));
         }
     }
-}
-
-/// Get command statistics for a specific command
-pub const CommandStats = struct {
-    cmd_hash: []const u8,
-    cmd: []const u8,
-    frequency: i64,
-    last_used: i64,
-    rank: f64,
-};
-
-pub fn getCommandStats(
-    db: *sqlite.Db,
-    cmd: []const u8,
-    allocator: std.mem.Allocator,
-) !?CommandStats {
-    const query =
-        \\SELECT s.cmd_hash, s.cmd, s.frequency, s.last_used, h.rank
-        \\FROM command_stats s
-        \\LEFT JOIN (
-        \\    SELECT h.cmd, h.rank
-        \\    FROM history h
-        \\    ORDER BY h.timestamp DESC
-        \\    LIMIT 1
-        \\) h ON h.cmd = s.cmd
-        \\WHERE s.cmd = ?;
-    ;
-
-    var stmt = try db.prepare(query);
-    defer stmt.deinit();
-
-    var iter = try stmt.iterator(struct {
-        cmd_hash: []const u8,
-        cmd: []const u8,
-        frequency: i64,
-        last_used: i64,
-        rank: ?f64,
-    }, .{cmd});
-
-    if (try iter.next(.{})) |row| {
-        return CommandStats{
-            .cmd_hash = try allocator.dupe(u8, row.cmd_hash),
-            .cmd = try allocator.dupe(u8, row.cmd),
-            .frequency = row.frequency,
-            .last_used = row.last_used,
-            .rank = row.rank orelse 0.0,
-        };
-    }
-
-    return null;
-}
-
-/// Get top commands by rank
-pub fn getTopRankedCommands(
-    db: *sqlite.Db,
-    limit: usize,
-    allocator: std.mem.Allocator,
-) !std.ArrayList(struct {
-    cmd: []const u8,
-    frequency: i64,
-    last_used: i64,
-    rank: f64,
-}) {
-    const query =
-        \\SELECT h.cmd, s.frequency, s.last_used, h.rank
-        \\FROM history h
-        \\JOIN command_stats s ON (
-        \\    SELECT sub.cmd_hash FROM history sub WHERE sub.id = h.id
-        \\) = s.cmd_hash
-        \\GROUP BY h.cmd
-        \\ORDER BY h.rank DESC, h.timestamp DESC
-        \\LIMIT ?;
-    ;
-
-    var stmt = try db.prepare(query);
-    defer stmt.deinit();
-
-    var iter = try stmt.iterator(struct {
-        cmd: []const u8,
-        frequency: i64,
-        last_used: i64,
-        rank: f64,
-    }, .{@intCast(limit)});
-
-    var results = std.ArrayList(struct {
-        cmd: []const u8,
-        frequency: i64,
-        last_used: i64,
-        rank: f64,
-    }).init(allocator);
-
-    while (try iter.next(.{})) |row| {
-        try results.append(.{
-            .cmd = try allocator.dupe(u8, row.cmd),
-            .frequency = row.frequency,
-            .last_used = row.last_used,
-            .rank = row.rank,
-        });
-    }
-
-    return results;
 }

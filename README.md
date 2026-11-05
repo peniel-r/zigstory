@@ -25,6 +25,7 @@
 - **Adaptive prefix queries** favor text indexes for selective prefixes and ranking for broad prefixes
 - **Advanced frecency ranking** based on frequency and recency scoring
 - **Connection pooling** for optimal database performance
+- **Background read-only connection warm-up** when the profile registers the predictor
 
 ### 🔍 **Interactive Search**
 
@@ -101,12 +102,22 @@ The system uses a **Split-Brain Architecture** optimized for both write and read
    - Optimized indexes for prefix matching
    - Automatic schema migrations
 
+The published predictor uses PowerShell's own `System.Management.Automation`
+assembly; it does not bundle a second PowerShell SDK. A clean win-x64 publish is
+eight files (about 1.9 MiB including native SQLite). Registration starts optional
+connection warm-up on a worker thread. If history is unavailable, warm-up leaves
+it untouched and the next prediction retries normally. This removes connection
+opening from requests once warm-up has completed; it does not guarantee that the
+very first keystroke arrives after warm-up or eliminate remaining .NET JIT cost.
+The adaptive query probe now checks up to 1,024 matching rows before choosing the
+rank-first plan, avoiding full rank-index walks for moderately selective prefixes.
+
 ## 🛠️ Prerequisites
 
 - **OS**: Windows (win32)
 - **Shell**: PowerShell 7+
 - **Build Tools**:
-  - [Zig](https://ziglang.org/) 0.15.2+
+   - [Zig](https://ziglang.org/) 0.16.0 (0.17 is not yet supported)
   - [.NET 8 SDK](https://dotnet.microsoft.com/)
 - **Optional**: [fzf](https://github.com/junegunn/fzf) for fzf-based search
 
@@ -681,7 +692,7 @@ See [docs/plan.md](docs/plan.md) for the detailed development roadmap.
 - [x] **Phase 2**: Write Path & Shell Integration ✅
 - [x] **Phase 3**: High-Performance Predictor ✅
 - [x] **Phase 4**: TUI Search Implementation ✅
-- [/] **Phase 5**: Frecency Ranking & Advanced Stats (Nearly Complete)
+- [x] **Phase 5**: Frecency Ranking & Advanced Stats (initial feature set complete)
 
 ### Current Status
 
@@ -693,14 +704,15 @@ See [docs/plan.md](docs/plan.md) for the detailed development roadmap.
 - ✅ Clipboard integration
 - ✅ Performance targets met
 
-**Phase 5 In Progress** - Advanced ranking and statistics are being implemented:
+**Phase 5 initial feature set complete** - Further decay and search improvements
+are planned separately; existing ranking does not decay until `recalc-rank` runs:
 
 - ✅ **Frecency Algorithm**: Hybrid frequency/recency scoring implemented
 - ✅ **Real-time Ranking**: Ranks calculated on every command execution
 - ✅ **Batch Recalculation**: `zigstory recalc-rank` command for re-ranking history
-- ✅ **Detailed Stats**: `zigstory stats` command with ASCII visualizations
+- ✅ **Detailed Stats**: `zigstory stats` command with local-time text bar charts
 - ✅ **fzf Integration**: `zigstory fzf` command with Ctrl+F binding
-- ✅ **Performance**: Recalculation of 10k entries in <1s
+- ✅ **Performance**: Local correctness, latency and memory regression gates
 - ✅ **Predictor Integration**: Rank-based sorting with committed-write cache invalidation
 - ✅ **Directory Filtering**: Context-aware browsing and search in TUI
 

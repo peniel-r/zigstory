@@ -416,7 +416,6 @@ const TuiApp = struct {
     }
 
     /// Draw the TUI interface
-    /// Draw the TUI interface
     fn draw(self: *TuiApp, allocator: std.mem.Allocator) !void {
         const win = self.vx.window();
         // Compute current time once per frame for relative timestamps.

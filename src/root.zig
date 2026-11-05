@@ -6,6 +6,6 @@ pub const ranking = @import("db/ranking.zig");
 pub const record = @import("db/record.zig");
 
 test "database initialization" {
-    // Basic sanity check, more comprehensive tests in tests/db_test.zig
+    // Basic sanity check; full coverage runs from src/regression_tests.zig.
     _ = @import("db/database.zig");
 }

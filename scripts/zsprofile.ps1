@@ -351,10 +351,14 @@ if ($dllLoaded) {
     $existing = Get-PSSubsystem -Kind CommandPredictor | Where-Object { $_.Id -eq $predictorId }
 
     if (-not $existing) {
+        $predictor = [zigstoryPredictor.ZigstoryPredictor]::new()
         [System.Management.Automation.Subsystem.SubsystemManager]::RegisterSubsystem(
             [System.Management.Automation.Subsystem.SubsystemKind]::CommandPredictor,
-            [zigstoryPredictor.ZigstoryPredictor]::new()
+            $predictor
         )
+        # Open the read-only connection off the prompt/input path. Failure is
+        # harmless here; a real prediction retries and reports database errors.
+        $null = $predictor.WarmUpAsync()
     }
 
     # Enable predictive IntelliSense
@@ -407,7 +411,7 @@ if (Test-Path $Global:ZigstoryBin) {
     Set-Alias -Name zs -Value Search-ZigstoryHistory -Scope Global
     
     # Bind Ctrl+R to interactive search
-    if (Get-Module -ListAvailable PSReadLine) {
+    if ((Get-Module PSReadLine) -or (Get-Module -ListAvailable PSReadLine)) {
         Import-Module PSReadLine
         Initialize-ZigstoryHistoryCapture
         Set-PSReadLineKeyHandler -Key "Ctrl+r" -ScriptBlock {

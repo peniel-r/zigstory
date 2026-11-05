@@ -125,7 +125,7 @@ dotnet run --project tests\predictor\PredictorRegressionTests.csproj -c Release 
 
 These check cache freshness after committed writes/rank changes, stable suggestion
 ownership, literal wildcard/path handling, concurrent callers, in-flight SQLite
-cancellation, error diagnostics, and that disposing the predictor releases the
+    cancellation, error diagnostics, and that disposing the predictor releases the
 database file. All databases are temporary; no profile is loaded or installed.
 
 ## Performance gates
@@ -142,6 +142,7 @@ The recipe builds ReleaseFast CLI/profile tools and runs temporary synthetic
 | --- | --- |
 | Full CLI startup plus empty metrics p95 | < 1,000 ms |
 | New-connection / cached prediction p95 | < 50 / 10 ms |
+| Prediction after background connection warm-up p95 | < 50 ms |
 | Headless 160x240 frame p95 | < 50 ms |
 | Loaded TUI rows / result-arena capacity | <= 237 / < 1 MiB |
 | Second-half result-arena peak | <= first-half peak |
@@ -224,3 +225,24 @@ directory on exit.  No existing user data is touched.
 |------|---------|
 | `0` | All tests passed |
 | `1` | One or more tests failed |
+
+## November cleanup coverage
+
+The obsolete `db_test.zig`, `add_test.zig`, `write_test.zig`, `import_test.zig`,
+and `ranking_perf_test.zig` were not wired into the build and used pre-0.16 APIs.
+Their useful assertions now run in `src/regression_tests.zig` and the functional
+suite: connection PRAGMAs, an actual WAL read snapshot during recording, generated
+and supplied metadata, path/command validation, empty/quoted imports and rank
+repair. Tests for the retired raw writer/pool and timestamp-based duplicate check
+were removed with those unused APIs. They remain available in Git history.
+
+Predictor tests exercise concurrent/cancelled warm-up, missing-history retry and
+disposal, plus LRU update/eviction behavior. Upgrade tests verify fresh publishing
+does not include PowerShell assemblies and stays below ten MiB, then load/register
+that package in clean PowerShell processes and validate native SQLite.
+The synthetic profiler reports connection warm-up and subsequent uncached requests
+separately. These run in an already-started .NET host; they do not measure initial
+assembly loading or establish an end-to-end first-keystroke latency guarantee.
+`--benchmark` also compares text-index and rank-index queries on 400-match
+prefixes and a broad 100k-match prefix. Production probes up to 1,024 candidates
+before choosing rank-first, so moderately selective prefixes use the text index.

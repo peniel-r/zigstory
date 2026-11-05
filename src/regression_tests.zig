@@ -10,6 +10,72 @@ const output = @import("cli/output.zig");
 const allocator = std.testing.allocator;
 const io = std.testing.io;
 
+test "user database opening creates directories and sets WAL connection options" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+    var db = try zigstory.db.openUserDb(home, allocator, io);
+    defer db.deinit();
+    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "PRAGMA synchronous"));
+    try std.testing.expectEqual(@as(i64, 1000), try scalar(&db, "PRAGMA busy_timeout"));
+    var statement = try db.prepare("PRAGMA journal_mode");
+    defer statement.deinit();
+    var rows = try statement.iterator([]const u8, .{});
+    const mode = (try rows.nextAlloc(allocator, .{})).?;
+    defer allocator.free(mode);
+    try std.testing.expectEqualStrings("wal", mode);
+}
+
+test "a WAL read snapshot does not block a recording on another connection" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+    var reader = try zigstory.db.openUserDb(home, allocator, io);
+    defer reader.deinit();
+    var writer = try zigstory.db.openUserDb(home, allocator, io);
+    defer writer.deinit();
+    try reader.exec("BEGIN", .{}, .{});
+    errdefer zigstory.record.rollback(&reader);
+    try std.testing.expectEqual(@as(i64, 0), try scalar(&reader, "SELECT COUNT(*) FROM history"));
+    try add.addCommand(&writer, .{ .cmd = "echo writer", .cwd = "local", .exit_code = 0, .duration_ms = 12 }, allocator, io);
+    try std.testing.expectEqual(@as(i64, 0), try scalar(&reader, "SELECT COUNT(*) FROM history"));
+    try reader.exec("COMMIT", .{}, .{});
+    try std.testing.expectEqual(@as(i64, 1), try scalar(&reader, "SELECT COUNT(*) FROM history"));
+}
+
+test "add validates paths and preserves supplied or generated session metadata" {
+    var db = try zigstory.db.initDb(":memory:");
+    defer db.deinit();
+    try std.testing.expectError(error.EmptyCommand, add.addCommand(&db, .{ .cmd = "", .cwd = "local", .exit_code = 0, .duration_ms = 0 }, allocator, io));
+    try std.testing.expectError(error.EmptyPath, add.addCommand(&db, .{ .cmd = "echo", .cwd = "", .exit_code = 0, .duration_ms = 0 }, allocator, io));
+    try add.addCommand(&db, .{ .cmd = "generated", .cwd = "local", .exit_code = 0, .duration_ms = 0 }, allocator, io);
+    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT COUNT(*) FROM history WHERE length(session_id)=36 AND length(hostname)>0"));
+    try add.addCommand(&db, .{ .cmd = "supplied", .cwd = "local", .exit_code = 7, .duration_ms = 23, .session_id = "custom-session", .hostname = "custom-host" }, allocator, io);
+    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT COUNT(*) FROM history WHERE cmd='supplied' AND session_id='custom-session' AND hostname='custom-host' AND exit_code=7 AND duration_ms=23"));
+}
+
+test "PSReadLine parsing handles empty files and quoted commands" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    for ([_][]const u8{ "", " \t\r\n\r\n", "echo \"quoted\"\nls | grep test\n" }, 0..) |contents, i| {
+        try tmp.dir.writeFile(io, .{ .sub_path = "history.txt", .data = contents });
+        const file = try tmp.dir.openFile(io, "history.txt", .{});
+        defer file.close(io);
+        const parsed = try import_history.parseHistoryFile(allocator, io, file);
+        defer {
+            for (parsed.entries) |entry| allocator.free(entry.cmd);
+            allocator.free(parsed.entries);
+        }
+        try std.testing.expectEqual(@as(usize, if (i == 2) 2 else 0), parsed.count);
+        if (i == 2) {
+            try std.testing.expectEqualStrings("echo \"quoted\"", parsed.entries[0].cmd);
+            try std.testing.expectEqualStrings("ls | grep test", parsed.entries[1].cmd);
+        }
+    }
+}
+
 test "PSReadLine imports assign increasing timestamps in file order" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
