@@ -74,6 +74,29 @@ internal static class TerminalChecks
         }
     }
 
+    public static void RunIdleStop(string executable)
+    {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("ConPTY checks require Windows.");
+        var directory = Path.Combine(Path.GetTempPath(), $"zigstory_idle_stop_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            foreach (var arguments in new string[][] { [], ["--full-queue"] })
+            {
+                using var console = new PseudoConsoleSession(100, 30);
+                var process = console.LaunchChild(directory, executable, arguments);
+                var exitCode = console.WaitForExit(process, TimeSpan.FromSeconds(5));
+                var transcript = console.CloseAndReadTranscript();
+                if (exitCode != 0 || !transcript.Contains("ZS_IDLE_STOP_BEGIN") || !transcript.Contains("ZS_IDLE_STOP_END"))
+                    throw new InvalidOperationException($"Idle reader shutdown failed: {transcript}");
+                Console.WriteLine(arguments.Length == 0
+                    ? "PASS Idle Windows console input reader stops without a key or terminal DSR response."
+                    : "PASS Windows input producer stops while its event queue is full.");
+            }
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
     private static void CheckFirstFrameAndCancel(string executable, string directory)
     {
         var report = Path.Combine(directory, "terminal.json");
@@ -265,7 +288,7 @@ internal static class TerminalChecks
         public uint WaitForExit(ProcessInfo process, TimeSpan timeout)
         {
             if (WaitForSingleObject(process.Process, checked((uint)timeout.TotalMilliseconds)) != 0)
-                throw new TimeoutException("Pseudoconsole process did not exit.");
+                throw new TimeoutException($"Pseudoconsole process did not exit. Isolated fixture output: {Transcript}");
             Check(GetExitCodeProcess(process.Process, out var exitCode), "Read exit code");
             return exitCode;
         }

@@ -38,6 +38,13 @@ if (args.Length > 0 && args[0] == "--profile")
     return;
 }
 
+if (args.Length > 0 && args[0] == "--terminal-stop-check")
+{
+    if (args.Length != 2) throw new ArgumentException("Usage: --terminal-stop-check <zigstory-input-stop-probe.exe>");
+    TerminalChecks.RunIdleStop(args[1]);
+    return;
+}
+
 if (args.Length > 0 && args[0] == "--recording-benchmark")
 {
     if (args.Length != 2) throw new ArgumentException("Usage: --recording-benchmark <zigstory.exe>");

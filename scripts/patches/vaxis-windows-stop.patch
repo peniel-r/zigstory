@@ -1,0 +1,86 @@
+diff --git a/src/Loop.zig b/src/Loop.zig
+--- a/src/Loop.zig
++++ b/src/Loop.zig
+@@ -20,8 +20,8 @@
+         tty: *Tty,
+         vaxis: *Vaxis,
+
+         queue: Queue(T, 512),
+         thread: ?std.Io.Future(void) = null,
+-        should_quit: bool = false,
++        should_quit: std.atomic.Value(bool) = .init(false),
+
+         /// Initialize the event loop. This is an intrusive init so that we have
+@@ -64,13 +64,18 @@
+             // If we don't have a thread, we have nothing to stop
+             if (self.thread == null) return;
+-            self.should_quit = true;
+-            // trigger a read
+-            self.vaxis.deviceStatusReport(self.tty.writer()) catch {};
++            self.should_quit.store(true, .release);
++            if (builtin.os.tag == .windows) {
++                // A DSR response is discarded inside WindowsTty.nextEvent;
++                // enqueue an actual console event to unblock ReadConsoleInputW.
++                self.tty.wakeInput() catch |err| log.err("unable to wake console input: {}", .{err});
++            } else {
++                self.vaxis.deviceStatusReport(self.tty.writer()) catch {};
++            }
+
+             if (self.thread) |*thread| {
+-                thread.await(self.io);
++                if (builtin.os.tag == .windows) thread.cancel(self.io) else thread.await(self.io);
+                 self.thread = null;
+-                self.should_quit = false;
++                self.should_quit.store(false, .release);
+             }
+         }
+
+@@ -155,7 +160,8 @@
+                 .windows => {
+                     var parser: Parser = .{};
+-                    while (!self.should_quit) {
++                    while (!self.should_quit.load(.acquire)) {
+                         const event = try self.tty.nextEvent(&parser, paste_allocator);
++                        if (self.should_quit.load(.acquire)) break;
+                         try handleEventGeneric(self, self.vaxis, &cache, Event, event, null);
+                     }
+                 },
+@@ -172,7 +178,7 @@
+                     var buf: [1024]u8 = undefined;
+                     var read_start: usize = 0;
+                     // read loop
+-                    read_loop: while (!self.should_quit) {
++                    read_loop: while (!self.should_quit.load(.acquire)) {
+                         const n = try self.tty.read(buf[read_start..]);
+                         var seq_start: usize = 0;
+                         while (seq_start < n) {
+diff --git a/src/tty.zig b/src/tty.zig
+--- a/src/tty.zig
++++ b/src/tty.zig
+@@ -326,6 +326,17 @@
+         }
+     }
+
++    /// Wake a blocking console read without requiring a terminal reply or key.
++    pub fn wakeInput(_: *WindowsTty) !void {
++        const handle = CreateFileW(std.unicode.utf8ToUtf16LeStringLiteral("CONIN$"), 0x40000000, 3, null, 3, 0, null);
++        if (handle == windows.INVALID_HANDLE_VALUE) return windows.unexpectedError(windows.GetLastError());
++        defer windows.CloseHandle(handle);
++        var record: INPUT_RECORD = .{ .EventType = 0x0010, .Event = .{ .FocusEvent = .{ .bSetFocus = .TRUE } } };
++        var written: windows.DWORD = 0;
++        if (!WriteConsoleInputW(handle, &record, 1, &written).toBool()) return windows.unexpectedError(windows.GetLastError());
++        if (written != 1) return error.Unexpected;
++    }
++
+     pub const EventState = struct {
+         ansi_buf: [128]u8 = undefined,
+         ansi_idx: usize = 0,
+@@ -741,6 +752,8 @@
+     pub const PINPUT_RECORD = *INPUT_RECORD;
+
+     pub extern "kernel32" fn ReadConsoleInputW(hConsoleInput: windows.HANDLE, lpBuffer: PINPUT_RECORD, nLength: windows.DWORD, lpNumberOfEventsRead: *windows.DWORD) callconv(.winapi) windows.BOOL;
++    pub extern "kernel32" fn WriteConsoleInputW(hConsoleInput: windows.HANDLE, lpBuffer: *const INPUT_RECORD, nLength: windows.DWORD, lpNumberOfEventsWritten: *windows.DWORD) callconv(.winapi) windows.BOOL;
++    pub extern "kernel32" fn CreateFileW(lpFileName: [*:0]const u16, dwDesiredAccess: windows.DWORD, dwShareMode: windows.DWORD, lpSecurityAttributes: ?*windows.SECURITY_ATTRIBUTES, dwCreationDisposition: windows.DWORD, dwFlagsAndAttributes: windows.DWORD, hTemplateFile: ?windows.HANDLE) callconv(.winapi) windows.HANDLE;
+     pub extern "kernel32" fn GetConsoleOutputCP() callconv(.winapi) windows.UINT;
+     pub extern "kernel32" fn GetConsoleMode(kConsoleHandle: windows.HANDLE, lpMode: *windows.DWORD) callconv(.winapi) windows.BOOL;
+     pub extern "kernel32" fn SetConsoleMode(hConsoleHandle: windows.HANDLE, dwMode: windows.DWORD) callconv(.winapi) windows.BOOL;

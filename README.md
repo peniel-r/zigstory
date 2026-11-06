@@ -132,7 +132,7 @@ The easiest way to install `zigstory` is using the provided installation script.
 git clone https://github.com/yourusername/zigstory.git
 cd zigstory
 
-# 2. Fetch dependencies and apply the checked-in Zig 0.16 compatibility patch
+# 2. Fetch dependencies and apply the checked-in SQLite compatibility and Vaxis shutdown patches
 just prepare
 
 # 3. Build and install automatically
@@ -546,9 +546,14 @@ Run repeatable synthetic correctness/performance gates with:
 just performance
 ```
 
-This builds the CLI and four profiling tools, then checks a private 100,000-row
-fixture. The project uses **local validation, not GitHub Actions**; see
+This builds the CLI, four profiling tools and the Windows input-shutdown probe,
+then checks a private 100,000-row fixture. The project uses **local validation, not GitHub Actions**; see
 [`tests\README.md`](tests/README.md) for thresholds and limitations.
+
+`just prepare` also applies the pinned libvaxis Windows shutdown patch. This
+prevents input-loop exit from depending on another key event or a terminal status
+response. `just performance` checks idle-reader and full-queue shutdown in an
+isolated console; see [`docs/vaxis-windows-stop.md`](docs/vaxis-windows-stop.md).
 
 Substring searches materialize deduplicated IDs in a SQLite TEMP table once per
 query or detected database change. Indexed page seeks avoid repeating grouping

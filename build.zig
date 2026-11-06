@@ -94,6 +94,20 @@ pub fn build(b: *std.Build) void {
     const profile_step = b.step("profile-tools", "Build the read-only TUI paging/rendering profiler");
     profile_step.dependOn(&profile_install.step);
 
+    const input_stop_probe = b.addExecutable(.{
+        .name = "zigstory-input-stop-probe",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tui/input_stop_probe.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "vaxis", .module = vaxis_mod }},
+        }),
+    });
+    const input_stop_install = b.addInstallArtifact(input_stop_probe, .{});
+    profile_step.dependOn(&input_stop_install.step);
+    const input_stop_step = b.step("terminal-stop-probe", "Build the isolated Windows idle input-loop shutdown regression");
+    input_stop_step.dependOn(&input_stop_install.step);
+
     const startup_profile = b.addExecutable(.{
         .name = "zigstory-startup-profile",
         .root_module = b.createModule(.{

@@ -25,4 +25,16 @@ try {
         }
         Write-Host 'SQLite compatibility patch is already applied.'
     }
+    $package = 'zig-pkg\vaxis-0.6.0-BWNV_HHwCQCy33z_jb0RHLjoinqQ8tgQVZI9z2e5Yqdd'
+    $patch = Join-Path $PSScriptRoot 'patches\vaxis-windows-stop.patch'
+    & git apply --check "--directory=$package" $patch 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        & git apply "--directory=$package" $patch
+        if ($LASTEXITCODE -ne 0) { throw 'Vaxis Windows shutdown patch failed.' }
+        Write-Host 'Applied pinned Vaxis Windows shutdown patch.'
+    } else {
+        & git apply --reverse --check "--directory=$package" $patch 2>$null
+        if ($LASTEXITCODE -ne 0) { throw 'Vaxis sources match neither the pristine nor patched revision. Refusing to overwrite local changes.' }
+        Write-Host 'Vaxis Windows shutdown patch is already applied.'
+    }
 } finally { Pop-Location }

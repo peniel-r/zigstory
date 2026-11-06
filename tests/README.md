@@ -172,6 +172,11 @@ unused optional definition, not an active validation service or merge prerequisi
 Run the documented checks locally. The profiler now includes an empty native
 executable's process-creation/wall/CPU times to distinguish host startup overhead.
 
+Windows `just performance` also checks an idle input reader and a producer blocked
+on a full event queue. `just prepare` applies the pinned libvaxis shutdown patch;
+see `docs\vaxis-windows-stop.md`. The added probe is a console correctness check,
+not a terminal-latency benchmark.
+
 ## Terminal and release checks
 
 ```powershell

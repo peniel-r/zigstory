@@ -59,6 +59,8 @@ internal static class PerformanceChecks
             Require(result.GetProperty("deep_page_p95_ms").GetDouble() < 10, "cached deep-page p95 under 10 ms");
             Require(result.GetProperty("sqlite_peak_bytes").GetInt64() is > 0 and < 64 * 1024 * 1024,
                 "SQLite fixture/cache peak under 64 MiB");
+            if (OperatingSystem.IsWindows())
+                TerminalChecks.RunIdleStop(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(tuiProfiler))!, "zigstory-input-stop-probe.exe"));
             Console.WriteLine("Performance budgets passed (warm synthetic data; not universal latency promises).");
         }
         finally
