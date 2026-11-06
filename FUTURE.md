@@ -1,8 +1,43 @@
 # Future Improvements & Roadmap
 
-> **Status**: Ideas Collection (not a committed implementation backlog) | **Last Updated**: October 28, 2026
+> **Status**: Proposed ideas, not an approved implementation backlog | **Last Updated**: November 6, 2026
 
 This document outlines potential future features, integrations, and architectural improvements for **zigstory**.
+
+Implementation and deployment history belongs in [PLAN.md](PLAN.md); supported
+commands and usage belong in [README.md](README.md). Priorities and effort labels
+below are proposals, not authorization to implement or promises of delivery dates.
+
+## Completed foundation — not remaining work
+
+- Schema 3 stores exact command text and directory paths once, with stable event
+  identities and preserved execution metadata. Versions 0/1/2 migrate atomically.
+- Exponential frecency uses a 30-day half-life and indexed log-space keys; periodic
+  per-event rank rewrites are no longer required.
+- TUI substring search uses trigram candidates verified with literal LIKE matching,
+  full match counts, bounded result strings and indexed cached pages.
+- Immediate recording uses durable per-event payloads and background importer
+  launch; normal exit drains pending launches, and failed events are retryable.
+- PSReadLine sensitive/history-filtering decisions are respected. This is **not**
+  active secret redaction or database encryption.
+- Ctrl+R/Ctrl+F insert selections without touching the clipboard. Direct standalone
+  selection still copies; fzf preserves multiline commands with NUL record framing.
+- Predictor packaging, read-only warm-up, cache invalidation and schema checks,
+  Unicode handling, Windows input-loop shutdown and safe upgrades are implemented.
+- Windows x64 release bundles and local correctness/performance gates exist.
+
+## Recommended next sequence
+
+| Order | Proposed feature | Benefit | Rough effort |
+| --- | --- | --- | --- |
+| 1 | Ctrl+R initialized from the current command line | Search using what is already typed | Small |
+| 2 | Full-command preview | Inspect multiline commands and execution metadata | Medium |
+| 3 | Safe history deletion | Remove mistakes or sensitive entries consistently | Medium |
+| 4 | Richer filters | Search by session, host, repository, status or date range | Medium |
+| 5 | Context-aware predictions | Prefer commands relevant to the current project | Medium |
+
+Sort options and multi-word search are useful adjacent TUI improvements. The
+normalized catalog makes these features easier, but they are not implemented yet.
 
 ---
 
@@ -25,7 +60,20 @@ The project currently uses local builds and validation, not GitHub Actions.
 
 ### Cross-Platform Verification
 - **Goal**: Ensure reliability across OSs.
-- **Implementation**: Matrix testing for PowerShell Core on Ubuntu/macOS alongside Windows.
+- **Proposed work**: Linux/macOS builds, terminal/clipboard adapters, packaging and
+  PowerShell Core verification. Windows support does not imply these already work.
+- Bash/zsh/fish hooks are separate shell-integration work.
+
+### Public Releases and Authenticity
+- Publish versioned release artifacts and changelogs when requested.
+- Consider signed executables/manifests and publisher verification.
+- Existing SHA256 checks detect corruption; they are not signatures.
+
+### Toolchain Maintenance
+- Zig 0.16.0 remains the supported compiler. A Zig 0.17 migration requires updating
+  build APIs and verifying pinned SQLite/libvaxis dependencies and patches.
+- Keep hosted CI optional; local validation remains authoritative unless the
+  project explicitly adopts a hosted service.
 
 ---
 
@@ -34,32 +82,71 @@ The project currently uses local builds and validation, not GitHub Actions.
 Ensure data hygiene and security for sensitive command history.
 
 ### Active Secret Redaction
-- **Goal**: Prevent logging sensitive credentials to disk.
-- **Implementation**: "Pre-write" sanitizer in `src/db/write.zig`.
-  - Use regex to detect keys (AWS, API tokens, private keys).
-  - Redact to `REDACTED_SECRET` before SQL insertion.
+- **Goal**: Prevent sensitive credentials entering persisted history and payloads.
+- **Proposed work**: shared, configurable sanitization across shell recording,
+  direct CLI input and imports. `src/db/write.zig` was retired; the current writer
+  is `src/db/record.zig` and durable payloads originate in `scripts/zsprofile.ps1`.
+- Sanitize **before the pending JSON file is written**, not merely before SQL
+  insertion. Otherwise a failed recording still leaves plaintext credentials.
+- Test token formats, quoting, multiline input, false positives and safe exclusions.
+- Redacted commands must not be silently treated as executable originals.
+
+### Leading-Space Privacy Mode
+- Opt out of recording an individual command by prefixing it with a space.
+- Preserve existing PSReadLine filtering decisions and make this behavior opt-in.
+
+### Safe Deletion and Duplicate Cleanup
+- Add deletion by execution ID or exact command, with confirmation/dry-run and
+  backup or undo policy. Keep event IDs stable for unaffected entries.
+- Update counts, decay keys, latest links, directory locations and FTS atomically.
+- Offer **explicit** cleanup of duplicates created by old imports. Identical command
+  text alone is not proof that two executions are duplicates; never prune silently.
 
 ### At-Rest Encryption
 - **Goal**: Protect history database if file is exfiltrated.
-- **Implementation**:
-  - Migration to SQLCipher.
-  - Or Zig-native ChaCha20 encryption for specific columns (`cmd`, `cwd`).
+- **Proposed work**:
+  - Evaluate SQLCipher-compatible readers/writers and migration/key recovery.
+  - Prefer evaluating whole-database encryption, including the search index.
+  - Include WAL, backups, pending payloads, key storage/recovery and upgrade behavior.
+  - Column encryption alone conflicts with indexed substring search and can still
+    leak secrets through plaintext FTS or other indexes; it is not a drop-in fix.
 
 ---
 
 ## 3. Advanced Intelligence (AI)
 
-Elevate the current "Frecency" (Frequency + Recency) model with local AI.
+Current suggestions come from local history and exponential frecency, not an LLM.
+The following prediction policies and AI integrations remain optional ideas.
+
+### Directory/Repository-Aware Predictions
+- Prefer current-directory or repository history, with a configurable global fallback.
+- Cache keys/invalidation must include context, not just the input prefix.
+- Define repository boundaries and path/case semantics; do not accidentally match
+  unrelated directories with a naive string prefix.
+
+### Failure-Aware Suggestions
+- Optionally suppress or down-rank known typos and consistently failing commands.
+- Distinguish known failures from unknown legacy/imported status; absence of a
+  recorded success is not sufficient evidence that a command is invalid.
+- Schema 3 has success counts; failure policy is **not** currently applied.
+
+### Configurable Ranking
+- Expose supported tuning for the half-life, context and suggestion limits.
+- A half-life change requires an atomic score-key rebuild and matching policy
+  metadata. Changing only a configuration value would mix incompatible score units.
 
 ### Local LLM Integration
 - **Goal**: Natural language command suggestions.
-- **Implementation**: `zigstory suggest "<intent>"`
-  - Connect to local Ollama instance (codellama, mistral).
-  - Example: "undo last commit" -> `git reset --soft HEAD~1`.
+- **Proposed API, not available**: `zigstory suggest "<intent>"`.
+- Consider an optional local Ollama-compatible backend; model choice is not fixed.
+- Network/history access must be explicit and privacy-preserving. Return suggestions
+  for inspection, never automatically execute generated commands.
+- Explain assumptions and potentially destructive effects; do not present model
+  output or frecency as a calibrated confidence percentage.
 
 ### Workflow Graphing
 - **Goal**: Predict sequences of commands.
-- **Implementation**:
+- **Proposed work**:
   - Analyze `session_id` sequences.
   - Build Markov chain or simple graph.
   - Suggest next logical command (e.g., `git push` after `git commit`).
@@ -70,487 +157,178 @@ Elevate the current "Frecency" (Frequency + Recency) model with local AI.
 
 ### Terminal Multiplexer Context (Tmux / Zellij)
 - **Goal**: Context-aware history per session/pane.
-- **Implementation**:
+- **Proposed work**:
   - Capture **Session Name** or **Window Title**.
   - Store as new column in DB.
   - Filter history by "Project Context" (e.g., Backend vs Frontend tabs).
 
 ### SSH / Remote Aggregation
 - **Goal**: Unified history across servers.
-- **Implementation**:
+- **Proposed work**:
   - "Headless" agent mode for remote servers.
   - Forward history back to local machine via secure channel.
+- Define authentication, permissions, stable event identities and conflict handling.
+- Sharing/export must be opt-in and sanitized; local-only operation remains the default.
+
+### Multi-Shell Hooks
+- Add bash/zsh/fish integrations with accurate exit status, execution time, starting
+  directory and session capture, plus durable retry behavior.
+- Starship supports multiple shells; zigstory does not inherit that support automatically.
 
 ---
 
 ## 5. TUI Power Features
 
+### Search the Current Command Line
+- Capture the PSReadLine buffer when Ctrl+R is pressed and supply it as the initial query.
+- Define whether selection replaces the full line or a selected range; cancellation
+  must preserve the existing line and cursor position.
+- A search-query CLI option and hook changes are still needed.
+
+### Full-Command Preview
+- Show full multiline text, directory, exact timestamp, duration, exit status,
+  execution count and session/host information without executing anything.
+- Keep memory bounded and sanitize terminal control sequences in display output.
+
+### Richer Filters
+- Add session, hostname, success/failure and date-range filters using recorded metadata.
+- Repository and recursive-directory filters require explicit boundary semantics.
+- Preserve accurate counts, latest matching execution, paging and selections.
+
+### Sort Options and Multi-Word Search
+- Toggle recent, frecency and frequency ordering with deterministic ties.
+- Support noncontiguous multi-word queries, such as `status git` matching `git status`.
+- Define quoting, AND/OR and highlighting rules; do not silently replace existing
+  literal substring semantics. Keep indexed candidate lookup and cache invalidation.
+
 ### Macro/Script Generator
 - **Goal**: Turn history into reusable scripts.
-- **Implementation**:
+- **Proposed work**:
   - Multi-select commands in TUI.
   - Hotkey (e.g., `Ctrl+S`) to "Save as Script".
-  - Generate `.ps1` function and copy to clipboard.
+  - Generate a `.ps1` script/function for review and explicit saving/export.
+- Multi-select exists, but currently joins selections with a pipe. Offer newline
+  or `;` joins, order editing and feedback when the five-selection limit is reached.
+- Never auto-execute generated scripts or change command order without confirmation.
 
 ### "tldr" Preview Integration
 - **Goal**: Instant command documentation.
-- **Implementation**:
-  - Fetch `tldr` pages for selected command.
+- **Proposed work**:
+  - Prefer local/cached `tldr` pages for the selected command; network fetches are opt-in.
   - Display in side panel/popup in TUI.
+
+## 6. CLI and Data Management
+
+### Machine-Readable Reports
+- Add structured JSON output to `list` and `stats`, including documented fields,
+  filtering and timezone semantics. These commands currently produce text only.
+- `zigstory perf --cwd <path> --format json` already exists.
+
+### Installation and History Diagnostics
+- Proposed `zigstory doctor`: verify installed components, schema/policy versions,
+  native SQLite, predictor registration, pending recordings and index health.
+- Default output must not expose command text or secrets. Repairs must be explicit.
+
+### Export and Cross-Machine Merge
+- Add export/import schemas that preserve execution identities and metadata.
+- Use event identities for idempotent merging; local integer command/directory IDs
+  are not portable identifiers, and old events without event IDs need a stable policy.
+- Include schema/version compatibility, privacy controls and recoverable failure paths.
+
+## 7. Remaining Performance Experiments
+
+- Draw before terminal capability negotiation only after lifecycle and Unicode-width
+  correctness are verified across supported terminals.
+- Narrow prior candidate sets during incremental typing while preserving exact query,
+  directory, backspace and committed-write invalidation semantics.
+- Benchmark cold assembly/JIT loading and full input-to-display latency separately
+  from warm SQL/renderer timings. Do not assume existing gates measure physical pixels.
+- Immediate per-event recording remains required. Timer batching and a persistent
+  writer/daemon are not part of the current agreed direction.
 
 ---
 
 # Starship Prompt Engine Integration
 
-> **Status**: Ideas Collection | **Created**: February 2, 2026
-
-This section outlines potential integrations between **zigstory** (PowerShell history manager) and **Starship** (cross-shell prompt) to enhance the shell experience with intelligent command history and context-aware prompts.
-
----
-
-## Overview
-
-**Why This Integration Matters:**
-- Zigstory already tracks command frequency, exit codes, duration, and directory context
-- Starship provides a powerful, customizable prompt engine
-- Combining both enables intelligent, context-aware shell prompts that learn from your workflow
-
-**Target Audience:**
-- Developers using PowerShell on Windows with Starship
-- Users who want predictive shell experiences
-- Teams wanting to share and optimize common workflows
-
----
-
-## Integration Options
-
-### 1. Zigstory Starship Module ⭐ Recommended
-
-Create a custom Starship module to display command history statistics directly in the prompt.
-
-**Features:**
-- Recent command count in current directory context
-- Last command status indicator (✅/❌)
-- Session statistics
-- Frecency rank of predicted next command
-- History health indicator (success rate visualization)
-
-**Example Prompt:**
-```
-~/projects/zigstory on  main via 🦀 v1.85
-❯ zigstory search          [💾 12,453 cmds] [🎯 top: git status] [✅ 94%]
-```
-
-**Implementation:**
-```toml
-# In starship.toml
-[zigstory]
-format = "[$symbol $status]($style) "
-symbol = "💾"
-detect_files = [".zigstory/history.db"]
-disabled = false
-
-# Alternative: custom command module
-[custom.zigstory]
-description = "Zigstory history info"
-when = "zigstory stats --json"
-shell = ["pwsh", "-c"]
-symbol = "💾"
-```
-
-**Effort:** Medium | **Priority:** High | **Dependencies:** None (uses existing zigstory commands)
-
----
-
-### 2. Pre-Execution Hook Integration
-
-Add a Starship-aware hook before each command executes to provide predictive context.
-
-**Features:**
-- Prediction preview (ghost text of predicted next command)
-- Context awareness (display current directory's command frequency)
-- Frecency boost (highlight frequently-used commands)
-
-**Implementation:**
-```powershell
-# Add to PowerShell profile (zsprofile.ps1)
-function Invoke-StarshipPreCommand {
-    $prediction = zigstory predict --cwd $PWD --json | ConvertFrom-Json
-    if ($prediction) {
-        $env:ZIGSTORY_PREDICTION = $prediction.command
-        $env:ZIGSTORY_CONFIDENCE = $prediction.confidence
-    }
-}
-
-# Hook into Starship
-Invoke-Expression (&starship init powershell)
-```
-
-**Example Output:**
-```
-~/projects/zigstory on  main via 🦀 v1.85
-❯ [🔮 87% confidence: git commit -m ]
-```
-
-**Effort:** Medium | **Priority:** High | **Dependencies:** Requires zigstory `predict` command (to be implemented)
-
----
-
-### 3. Git Repository Intelligence
-
-Leverage zigstory's directory filtering to enhance git-related prompts with history awareness.
-
-**Features:**
-- Show last git command executed in this repository
-- Predict next git command based on repository history
-- Display repository-specific command statistics
-- Highlight most common git workflows per repository
-
-**Example:**
-```
-~/projects/zigstory on  main via 🦀 v1.85
-❯ [📊 git: 142 cmds] [🔄 next: git commit -m] [🔥 workflow: dev-hotfix]
-```
-
-**Implementation:**
-```toml
-[custom.zigstory_git]
-description = "Repository-specific git history"
-symbol = "📊"
-when = '''
-  if (git rev-parse --is-inside-work-tree 2>$null) { return $true }
-  return $false
-'''
-shell = ["pwsh", "-NoProfile", "-Command"]
-command = '''
-  $repo = git rev-parse --show-toplevel
-  zigstory stats --directory "$repo" --filter "^git " --format json | 
-    ConvertFrom-Json
-'''
-```
-
-**Effort:** Medium | **Priority:** Medium | **Dependencies:** Requires zigstory directory filtering
-
----
-
-### 4. Context-Sensitive Prompt Segments
-
-Use zigstory's context to dynamically adjust Starship segments based on user behavior.
-
-**Features:**
-- Segment visibility based on command frequency
-- Dynamic color schemes based on project health
-- Warning segments for risky commands (e.g., `rm -rf`, `git push --force`)
-- Success indicators for recent test runs
-
-**Conceptual Implementation:**
-```rust
-// Starship module in Rust (future approach)
-pub struct ZigstoryModule {
-    cwd: String,
-    recent_commands: Vec<Command>,
-    frecency: f64,
-}
-
-impl Module for ZigstoryModule {
-    fn render(&self) -> Option<Segment> {
-        let confidence = self.calculate_confidence();
-        let top_cmd = self.most_frequent_command()?;
-
-        Some(Segment::new(&format!(
-            "{} {}",
-            self.style(confidence),
-            top_cmd.truncated(20)
-        )))
-    }
-
-    fn style(&self, confidence: f64) -> Style {
-        if confidence > 0.8 {
-            Style::new().green().bold()
-        } else if confidence > 0.5 {
-            Style::new().yellow()
-        } else {
-            Style::new().dimmed()
-        }
-    }
-}
-```
-
-**Example:**
-```
-~/projects/zigstory via ⚠️ [last test failed] via 🔥 [high-risk directory]
-❯
-```
-
-**Effort:** Large | **Priority:** Medium | **Dependencies:** Rust Starship module development
-
----
-
-### 5. Performance Monitoring
-
-Add performance metrics to your prompt to track command execution patterns.
-
-**Features:**
-- Average command duration in current directory
-- Slow command warnings (highlight if last command >5s)
-- Session efficiency (success rate, average duration)
-- Performance trend indicators
-
-**Example:**
-```
-~/projects/zigstory via ⚡ 2.3s avg [📉 15% slower than yesterday]
-❯
-```
-
-**Implementation:**
-```toml
-[custom.zigstory_perf]
-description = "Command performance metrics"
-symbol = "⚡"
-when = "zigstory stats --cwd $PWD --duration --format json 2>$null"
-shell = ["pwsh", "-NoProfile", "-Command"]
-command = '''
-  zigstory stats --cwd $PWD --duration --format json | 
-    ConvertFrom-Json | 
-    Select-Object -ExpandProperty avg_duration_ms
-'''
-```
-
-**Effort:** Low | **Priority:** Low | **Dependencies:** None (uses existing zigstory duration tracking)
-
----
-
-### 6. Search Integration Shortcut
-
-Create a Starship command alias/shortcut for instant search access directly from prompt.
-
-**Features:**
-- One-key shortcut to launch zigstory search
-- Visual indicator when search mode is active
-- Recent search history in prompt
-- Quick access to last 5 searches
-
-**Implementation:**
-```powershell
-# Starship custom command module
-[custom.zigsearch]
-description = "Quick zigstory search"
-symbol = "🔍"
-style = "bold blue"
-shell = ["pwsh", "-c"]
-format = "via [$output]($style)"
-when = '''
-  if ($env:ZIGSTORY_MODE -eq "search") { return $true }
-  return $false
-'''
-command = '''
-  echo "search active"
-'''
-```
-
-**Usage:**
-```
-~/projects/zigstory via 🔍 [search active]
-❯ git stat[press Enter for search]
-```
-
-**Effort:** Low | **Priority:** Low | **Dependencies:** None (uses existing zigstory search)
-
----
-
-### 7. Directory-Based Stats
-
-Show directory-specific command history and patterns in the prompt.
-
-**Features:**
-- Commands executed in current directory (count)
-- Top commands for this directory
-- Project health (success rate, average duration)
-- Activity heatmap (when this project is most used)
-
-**Example:**
-```
-~/projects/zigstory [💼 847 cmds] [✨ active: 9am-12pm] [🎯 top: git status]
-❯
-```
-
-**Implementation:**
-```toml
-[custom.zigstory_dir]
-description = "Directory-specific statistics"
-symbol = "💼"
-when = '''
-  if (Test-Path ~/.zigstory/history.db) { return $true }
-  return $false
-'''
-shell = ["pwsh", "-NoProfile", "-Command"]
-command = '''
-  zigstory stats --cwd $PWD --top 1 --format json | 
-    ConvertFrom-Json | 
-    ForEach-Object { "$($_.total_cmds) cmds | top: $($_.top_cmd)" }
-'''
-```
-
-**Effort:** Low | **Priority:** Medium | **Dependencies:** None (uses existing zigstory stats)
-
----
-
-## Implementation Roadmap (Starship Integration)
-
-### Phase 1: Simple Integration (1-2 days)
-
-**Goals:**
-- Add basic zigstory stats to Starship prompt
-- Display last command exit code as indicator
-- Show history count in prompt
-
-**Tasks:**
-1. [ ] Create `zigstory` custom module for Starship
-2. [ ] Add command count display
-3. [ ] Add exit code indicator (✅/❌)
-4. [ ] Test with existing zigstory installation
-
-**Effort Estimate:** 4-6 hours
-
----
-
-### Phase 2: Interactive Features (3-5 days)
-
-**Goals:**
-- Implement prediction preview with Starship
-- Add git repository intelligence
-- Directory context awareness
-
-**Tasks:**
-1. [ ] Implement zigstory `predict` command (if not exists)
-2. [ ] Create `Invoke-StarshipPreCommand` hook
-3. [ ] Add git repository history module
-4. [ ] Implement directory filtering for stats
-5. [ ] Add confidence score display
-
-**Effort Estimate:** 16-24 hours
-
----
-
-### Phase 3: Advanced Analytics (1-2 weeks)
-
-**Goals:**
-- Build Rust Starship module for performance
-- Real-time frecency tracking
-- Heatmap and trend visualization
-
-**Tasks:**
-1. [ ] Set up Rust development environment
-2. [ ] Create zigstory Starship module crate
-3. [ ] Implement async database queries
-4. [ ] Add frecency calculation in Rust
-5. [ ] Implement visualization components
-6. [ ] Performance testing and optimization
-
-**Effort Estimate:** 40-80 hours
-
----
-
-## Quick Start Example
-
-**Add to `starship.toml`:**
-```toml
-[custom.zigstory]
-description = "Zigstory history stats"
-symbol = "💾"
-format = " [$symbol$output]($style) "
-style = "bold purple"
-shell = ["pwsh", "-NoProfile", "-Command"]
-when = "if (Test-Path ~/.zigstory/history.db) { $true }"
-command = '''
-  zigstory list 1 --json | ConvertFrom-Json | 
-    ForEach-Object { $_.cmd.Substring(0, [Math]::Min(30, $_.cmd.Length)) }
-'''
-```
-
-**Example Output:**
-```
-~/projects/zigstory via 💾 zigstory search
-❯
-```
-
----
-
-## Design Considerations
-
-### ✅ Benefits
-
-- **Non-invasive**: Works with existing Starship configuration
-- **Context-aware**: Provides directory-specific insights
-- **Performance-focused**: Async queries, caching for sub-100ms render times
-- **Customizable**: Show/hide modules based on user preference
-- **Cross-platform**: PowerShell 7+ works on Linux/macOS/Windows
-
-### ⚠️ Considerations
-
-- **Performance impact**: Adds ~5-10ms to prompt render time (mitigate with caching)
-- **Dependencies**: Requires zigstory binary in PATH
-- **Database availability**: Depends on .zigstory/history.db accessibility
-- **Privacy**: Local-only processing, no data leaves the system
-
----
-
-## Additional Ideas
-
-### Future Enhancements
-
-1. **ML Integration**: Use machine learning to improve prediction accuracy
-2. **Team Workflows**: Share common command patterns across team members
-3. **Automated Profiles**: Suggest Starship configuration based on zigstory patterns
-4. **Health Scoring**: Calculate a "shell health" score based on error rates, command efficiency
-5. **Smart Aliases**: Suggest and create aliases based on frequently-used command patterns
-6. **Multi-shell Support**: Extend support to zsh, bash, fish (already supported by Starship)
-
-### Experimental Features
-
-1. **Voice Integration**: "Hey zigstory, what was that git command?"
-2. **Gesture-based Search**: Use mouse gestures to trigger search
-3. **Time-based Context**: Show different prompt segments based on time of day
-4. **Mood Detection**: Adjust prompt style based on error rates (e.g., encouraging messages after failures)
-
----
-
-## Testing Strategy
-
-### Unit Tests
-- Test zigstory command parsing for Starship modules
-- Test JSON output formatting for custom modules
-- Test exit code detection and display
-
-### Integration Tests
-- Test Starship module with various zigstory database states
-- Test performance with large databases (10,000+ commands)
-- Test error handling when database is unavailable
-
-### Performance Benchmarks
-- Measure prompt render time with/without zigstory integration
-- Test with concurrent access (multiple terminal sessions)
-- Optimize query performance for real-time display
-
----
-
-## Documentation Needs
-
-### User Documentation
-- Setup guide for zigstory + Starship integration
-- Configuration examples for common use cases
-- Troubleshooting common issues
-- Performance tuning guide
-
-### Developer Documentation
-- API reference for zigstory Starship module (if implemented in Rust)
-- Schema documentation for JSON outputs
-- Contribution guidelines for new modules
-
----
-
-## Related Resources
-
-- **Starship Documentation**: https://starship.rs/config/
-- **Zigstarship Project**: https://github.com/zigstarship/zigstarship (conceptual reference)
-- **PowerShell Prompt Customization**: https://docs.microsoft.com/en-us/powershell/module/psreadline/about/about_psreadline
+> **Status**: Optional integration ideas; no Starship module or prediction CLI is implemented.
+
+The existing PowerShell hook preserves custom prompts. Adding zigstory output to
+Starship is separate work and must not replace the user's prompt, duplicate
+prediction handlers, or overwrite existing key bindings without permission.
+
+## Recommended approach: cached, opt-in summaries
+
+Refresh a per-directory/session summary outside prompt rendering, then display it
+through an optional `[custom.zigstory]` module. Define private cache location,
+expiry, atomic replacement, committed-write invalidation and stale/missing-data
+behavior. Command text should be excluded unless the user explicitly opts in.
+
+Do **not** run `zigstory` or start a PowerShell process synchronously for every
+prompt and assume it costs only 5–10 ms. Local profiling has demonstrated material
+process-launch overhead. Even a cached custom module may still spawn its configured
+shell; measure that cost. A native Starship integration is a larger optional
+alternative if measurements justify it, not a prerequisite for the first version.
+
+## Candidate prompt features
+
+| Idea | Available foundation | Work still needed |
+| --- | --- | --- |
+| Directory count and last status | Recorded directory/exit metadata | Cached report formatting and an opt-in custom module |
+| Duration/slow-command indicator | Existing directory `perf` JSON | Background refresh and cache expiry; no synchronous query per prompt |
+| Session statistics/activity heatmap | Session IDs and timestamps | Session/time filters, aggregate output and cache policy |
+| Repository intelligence | Directory identities and history | Repository boundaries, repository-scoped reports and optional prediction |
+| Context-sensitive segments | Recorded status/duration | Explicit rules for visibility and warnings; avoid unsupported health claims |
+| Prediction preview | Existing PowerShell predictor | A supported CLI/IPC API if needed; no invented confidence percentages |
+| Search-mode/recent-query indicator | Ctrl+R/Ctrl+F already exist | Optional mode state and privacy-preserving search-history capture |
+
+### Current API facts
+
+- `zigstory perf --cwd <path> --format json` is supported.
+- `stats` and `list` currently produce text, not JSON.
+- `predict`, `suggest`, `doctor`, `export` and `delete` are proposed commands, not
+  available APIs. Any future options/output schema must be implemented and tested
+  before documentation presents them as working examples.
+- `[custom.zigstory]` names a possible Starship custom module. No native
+  `[zigstory]` configuration section is supplied by this project.
+- Directory filtering currently exists in the TUI; that does not establish
+  repository/session filters or the previously sketched `stats` flags.
+
+### Proposed milestones
+
+1. Define a minimal cached summary and benchmark prompt rendering with/without it.
+2. Add documented machine-readable reports and directory/session/repository scope.
+3. Test optional prediction/workflow or native-Starship integration only after
+   the basic module is useful and measured.
+
+No fixed schedule or latency guarantee is attached to these proposals.
+
+## Longer-term and exploratory ideas
+
+- Local ML, opt-in sanitized team workflows and reusable workflow graphs.
+- Smart alias suggestions or assisted Starship configuration, always reviewed
+  before changing shell configuration.
+- Descriptive activity/error/duration trends; a "shell health" score needs defined
+  semantics and should not imply a calibrated measure of productivity.
+- Voice or mouse/gesture search, time-based segments and user-selected adaptive
+  themes. These are low-priority experiments, not planned features; mood must not
+  be inferred as a factual diagnosis from error rates.
+
+## Validation required for future work
+
+- Use isolated fixtures, never alter installed history/configuration during tests.
+- Test stable IDs, transactional score/count/FTS repair, Unicode, multiline input,
+  literal matching, metadata filters, cache invalidation and bounded memory.
+- Verify privacy across payloads, database/FTS, exports, backups and prompt output.
+- Include missing/corrupt/locked database and unavailable-cache behavior, concurrent
+  shells, migration failures, package compatibility and rollback.
+- Benchmark full feature costs, including process/shell startup, cold JIT and
+  terminal I/O where applicable. Keep current local gates without replacing them
+  with universal latency claims or assuming hosted CI is enabled.
+- Update supported CLI schemas, setup/troubleshooting instructions and `PLAN.md`
+  only when a proposal is approved and implemented. Configuration examples must
+  use actual commands and preserve existing prompts.
+
+## Related resources
+
+- [Starship configuration](https://starship.rs/config/)
+- [PSReadLine documentation](https://learn.microsoft.com/powershell/module/psreadline/about/about_psreadline)
