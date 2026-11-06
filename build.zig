@@ -144,6 +144,21 @@ pub fn build(b: *std.Build) void {
     });
     profile_step.dependOn(&b.addInstallArtifact(search_benchmark, .{}).step);
 
+    const catalog_benchmark = b.addExecutable(.{
+        .name = "zigstory-catalog-benchmark",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/catalog_benchmark.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "sqlite", .module = sqlite_mod },
+                .{ .name = "zigstory", .module = mod },
+            },
+        }),
+    });
+    const catalog_step = b.step("catalog-prototype", "Build the disposable experimental catalog benchmark (does not migrate user history)");
+    catalog_step.dependOn(&b.addInstallArtifact(catalog_benchmark, .{}).step);
+
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);

@@ -10,6 +10,10 @@ const output = @import("cli/output.zig");
 const allocator = std.testing.allocator;
 const io = std.testing.io;
 
+test {
+    _ = @import("catalog_tests.zig");
+}
+
 test "user database opening creates directories and sets WAL connection options" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

@@ -430,3 +430,73 @@ The SDK 10.0.403 publish command rejected an experimental staging path containin
 an ampersand (MSB3094); publish staging uses the existing safe GUID path instead.
 That SDK/publishing-path edge case is separate from importer argument handling and
 remains a follow-up; normal generated staging and bundle/rollback tests pass.
+
+## Schema prototype (November 5, 2026)
+
+Prompt fix committed as `cb51319` with approval. Prototype persistent schema 3
+only on disposable version-2 fixtures; do not wire it into normal CLI startup,
+install it, or commit new work before review.
+
+- [x] Separate exact command text/statistics from execution events. Preserve
+  event IDs, row IDs, timestamps, nullable legacy metadata and ID high-water marks.
+- [x] Add per-command/per-directory latest-event metadata so directory filters
+  still select their own latest occurrence, with timestamp then ID tie-breaking.
+- [x] Normalize exact directory text to integer identities as well. A mostly-unique
+  long-path fixture exposed growth (78.4 -> 100.7 MiB) before this fix; the final
+  layout uses 37.2 MiB and preserves exact path/case/filter behavior.
+- [x] Add trigram FTS over distinct command text, always verified with existing
+  literal LIKE semantics; short/unsupported queries fall back to catalog scans.
+- [x] Prototype exponential frecency with a 30-day half-life in log space (sum
+  decayed contributions from every event). Ranking order is time invariant;
+  displayed scores would decay without periodically rewriting event rows.
+- [x] Validate atomic migration failure, retry idempotency, same-text grouping,
+  literal/Unicode/filter semantics, out-of-order events, index plans and repair.
+- [x] Benchmark complete first-result materialization, deep pages, storage before
+  and after explicit compaction, recording overhead and summary queries.
+- [x] Run active regression suites and `zig build run`. Keep production schema 2
+  unchanged until the prototype results/ranking policy are reviewed.
+
+Integration gate: production SQL/predictor changes, version-0/1 migration paths,
+maintenance/recalc compatibility, and deployment/rollback tests must be updated
+before schema 3 is enabled. This first prototype is not a deployable migration.
+
+### Terminal validation blocker found during prototype testing (November 6)
+
+- [x] Confirm repeated Ctrl+C/Enter timeouts occur inside libvaxis `Loop.stop`,
+  not the prototype SQL. Temporary markers showed stop begin without stop end.
+- [x] Add a narrow, checked-in patch to the pinned dependency: atomic stop flag,
+  actual console focus-event wake, pre-publish stop check and cancellation/join
+  of an input producer blocked by queue backpressure. POSIX wake remains unchanged.
+- [x] Apply through `just prepare` without overwriting divergent target-file
+  changes; verify already-patched preparation.
+- [x] Add isolated idle/full-queue stop probes. The unpatched idle probe timed
+  out; the patched probe passed. Six consecutive full ConPTY runs also passed
+  all four scenarios. Remove temporary application markers.
+- [x] Final regression/performance/app-run validation after the shutdown patch.
+
+No dependency revision or installed files were changed. The shutdown fix is
+separate from schema enablement and remains uncommitted pending review.
+
+Final validation (November 6): 56/56 Zig tests passed in Debug and ReleaseFast;
+321 PowerShell checks passed with the same five functional skips; existing .NET
+regressions passed; nine standalone catalog fixture/refusal/storage checks passed.
+All production performance gates passed, including the new idle and full-queue
+shutdown probes. Formatting/diff checks and `zig build run -Doptimize=ReleaseFast`
+passed. The intermittent ConPTY timeout was diagnosed rather than retried away:
+unpatched idle-stop failed, patched idle/full-queue passed, and six consecutive
+full ConPTY runs passed all four scenarios.
+
+Final normalized-directory prototype, warm synthetic 100k events / 25k commands:
+file-backed first-page medians 41.38 -> 7.70 ms broad, 13.80 -> 0.31 ms selective,
+25.82 -> 12.23 ms directory-scoped; deep pages ~0.04-0.06 ms. Used storage
+40.3 -> 23.4 MiB, SQLite allocation peak ~7 MiB; migration ~0.64 seconds in one
+run. Mostly-unique long-path fixture uses 78.4 -> 37.2 MiB with ~8 MiB SQLite
+peak. Actual disk compaction is separate from migration and benchmark figures
+are not universal latency/memory guarantees. `docs/catalog-prototype.md` details
+the proposed 30-day exponential policy and remaining production integration.
+
+The user approved the 30-day policy, separate commits and production integration.
+Shutdown fix committed as `945f009`; prototype commit follows. No schema 3
+deployment, installation, push or merge has occurred. Engram status/impact/sync
+remain unavailable with the installed executable. Production integration must
+pass the complete migration, reader/cache and deployment gates before review.

@@ -244,6 +244,21 @@ directory on exit.  No existing user data is touched.
 
 ## November cleanup coverage
 
+### Experimental catalog (not production startup)
+
+`zig build test` also runs `src/catalog_tests.zig` against disposable databases.
+To build/run the separate synthetic schema comparison:
+
+```powershell
+zig build catalog-prototype -Doptimize=ReleaseFast
+pwsh -NoProfile -File tests\catalog_regressions.ps1
+```
+
+The separate script checks exclusive file creation/refusal, result equivalence,
+storage, file-backed allocation peak and cleanup. It is not part of the production
+PowerShell runner yet. See `docs\catalog-prototype.md` for proposed ranking,
+benchmark scope and the integration/deployment work still required.
+
 The obsolete `db_test.zig`, `add_test.zig`, `write_test.zig`, `import_test.zig`,
 and `ranking_perf_test.zig` were not wired into the build and used pre-0.16 APIs.
 Their useful assertions now run in `src/regression_tests.zig` and the functional

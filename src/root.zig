@@ -4,6 +4,8 @@ pub const db = @import("db/database.zig");
 pub const cli = @import("cli/args.zig");
 pub const ranking = @import("db/ranking.zig");
 pub const record = @import("db/record.zig");
+// Experimental only: production db.ensureSchema remains at version 2.
+pub const catalog = @import("db/catalog.zig");
 
 test "database initialization" {
     // Basic sanity check; full coverage runs from src/regression_tests.zig.
