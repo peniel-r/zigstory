@@ -52,6 +52,13 @@ if (args.Length > 0 && args[0] == "--recording-benchmark")
     return;
 }
 
+if (args.Length > 0 && args[0] == "--schema3-check")
+{
+    if (args.Length != 2) throw new ArgumentException("Usage: --schema3-check <zigstory.exe>");
+    Schema3Checks.Run(args[1]);
+    return;
+}
+
 var directory = Path.Combine(Path.GetTempPath(), $"zigstory_predictor_{Guid.NewGuid():N}");
 Directory.CreateDirectory(directory);
 try

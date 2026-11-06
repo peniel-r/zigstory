@@ -500,3 +500,55 @@ Shutdown fix committed as `945f009`; prototype commit follows. No schema 3
 deployment, installation, push or merge has occurred. Engram status/impact/sync
 remain unavailable with the installed executable. Production integration must
 pass the complete migration, reader/cache and deployment gates before review.
+
+## Production schema-3 integration (approved)
+
+Reviewed prototype committed as `d4049cf`. No installation, push or merge.
+
+- [x] Atomic version-0/1/2 upgrades; validate schema/layout/policy on reopen and
+  preserve a read-only `history` compatibility view for existing read queries.
+- [x] Shared prepared normalized Writer for add, JSON and PSReadLine imports;
+  no hash allocations, per-event rank rewrites, batching delay or persistent writer.
+- [x] Catalog-based trigram TUI materialization with existing per-state cache
+  ownership, local/external invalidation, complete counts and bounded pages.
+- [x] Normalized stats/perf/list/fzf reads and fast PSReadLine occurrence counts.
+- [x] Predictor schema checks and catalog score-key/prefix queries; keep legacy
+  read support during a quiet transition, but never write old schemas from C#.
+- [x] Keep `recalc-rank` as a compatibility alias for explicit catalog/FTS repair;
+  update maintenance, help and schema documentation.
+- [x] Migration/retry/FTS/Unicode/cache/version tests, actual old-binary refusal,
+  backup-aware upgrade/rollback, package checks and production performance gates.
+- [x] `zig build run` and final validation.
+- [x] Human review and approval to commit production integration (November 6).
+- [ ] User deployment and installed smoke test; no deployment was requested.
+
+Integration notes: `history` is a read-only compatibility view without obsolete
+rank/hash fields. Legacy schema construction is isolated in `legacy_schema.zig`;
+the unused SHA/backfill/rank-rewrite APIs were removed. Production FK enforcement
+is enabled. The fzf reader now uses NUL record boundaries to preserve full
+multiline/Unicode/leading/trailing whitespace commands; embedded NUL commands are
+explicitly refused rather than silently split. A native fake-fzf regression runs
+through the PowerShell runner.
+
+New checks exercise a live predictor across actual CLI migration, future/policy
+refusal, normalized browsing/deduplication, independent read-only caches, external
+commits, >50k results, caller-owned recording transactions and stable repair IDs.
+`schema_upgrade_regressions.ps1` builds the actual schema-2 `cb51319` binary in a
+disposable archive, verifies refusal of schema 3, and tests success and injected
+post-migration failure restoring byte-identical old history and executable.
+
+Final integration validation: 61/61 Zig tests passed in Debug and ReleaseFast;
+322 PowerShell checks passed (same five functional skips); 39 existing .NET
+checks, nine live schema-3/predictor checks, ten actual legacy-upgrade/rollback
+checks and nine standalone catalog checks passed. ConPTY Ctrl+C/Enter/code-page
+checks and idle/full-queue shutdown probes passed. Existing production performance
+budgets now exercise normalized schema 3: 100k events / 25k matches initial
+median/p95 5.52/6.05 ms, deep page 0.051 ms, result arena 39,556 bytes, SQLite
+fixture/cache allocation peak 33,978,568 bytes (<64 MiB). These are warm synthetic
+measurements, not full shell/terminal latency guarantees.
+
+Formatting/diff checks and `zig build run -Doptimize=ReleaseFast` passed. No real
+history or installed files changed. The user reviewed production integration and
+approved committing it on November 6. Deployment must update executable and predictor together from a
+quiet NoProfile shell with the full database backup retained; rollback restores
+that schema-2 directory as well as the old binary/module.

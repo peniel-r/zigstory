@@ -28,7 +28,7 @@ internal static class PerformanceChecks
                     CREATE INDEX idx_history_cwd_time ON history(cwd,timestamp DESC,id DESC);
                     CREATE INDEX idx_cmd_prefix ON history(cmd COLLATE NOCASE);
                     CREATE INDEX idx_rank ON history(rank DESC,timestamp DESC);
-                    PRAGMA user_version=2;
+                    PRAGMA user_version=0;
                     """;
                 command.ExecuteNonQuery();
             }

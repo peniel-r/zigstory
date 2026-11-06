@@ -12,10 +12,11 @@ pub const History = struct {
     timestamp: i64,
 };
 
-const ranking = @import("ranking.zig");
+const legacy = @import("legacy_schema.zig");
 const record = @import("record.zig");
+const catalog = @import("catalog.zig");
 
-pub const schema_version = 2;
+pub const schema_version = 3;
 
 /// Caller owns the returned path. All user-facing commands share the same
 /// directory creation policy, including stats on a first-time installation.
@@ -63,6 +64,7 @@ pub fn initDb(path: [:0]const u8) !sqlite.Db {
     try rawExec(&db, "PRAGMA busy_timeout=1000");
     try rawExec(&db, "PRAGMA journal_mode=WAL");
     try rawExec(&db, "PRAGMA synchronous=NORMAL");
+    try rawExec(&db, "PRAGMA foreign_keys=ON");
 
     try ensureSchema(&db);
     return db;
@@ -72,6 +74,7 @@ pub fn ensureSchema(db: *sqlite.Db) !void {
     const version = try queryInt(db, "PRAGMA user_version");
     if (version > schema_version) return error.UnsupportedSchemaVersion;
     if (version < schema_version) try migrate(db);
+    try catalog.checkSchema(db);
 }
 
 fn migrate(db: *sqlite.Db) !void {
@@ -89,7 +92,7 @@ fn migrate(db: *sqlite.Db) !void {
         try rawExec(db, "ALTER TABLE history ADD COLUMN event_id TEXT");
         try rawExec(db, "CREATE UNIQUE INDEX idx_history_event ON history(event_id)");
     }
-    try rawExec(db, "PRAGMA user_version=2");
+    if (version < 3) try catalog.convertSchema2(db);
     try rawExec(db, "COMMIT");
 }
 
@@ -135,17 +138,26 @@ fn migrateInitial(db: *sqlite.Db) !void {
     if (!had_fts) {
         try rawExec(db, "INSERT INTO history_fts(history_fts) VALUES('rebuild')");
     }
-    try ranking.initRanking(db);
+    try legacy.initialize(db);
+    try legacy.addColumnIfMissing(db, "session_id", "TEXT");
+    try legacy.addColumnIfMissing(db, "hostname", "TEXT");
 }
 
 /// Explicitly rebuild and validate the external-content FTS index.
 pub fn maintain(db: *sqlite.Db) !void {
-    {
-        try rawExec(db, "BEGIN IMMEDIATE");
-        errdefer record.rollback(db);
-        try rawExec(db, "INSERT INTO history_fts(history_fts) VALUES('rebuild')");
-        try rawExec(db, "INSERT INTO history_fts(history_fts, rank) VALUES('integrity-check', 1)");
-        try rawExec(db, "COMMIT");
-    }
+    try catalog.repair(db);
     try rawExec(db, "PRAGMA optimize");
+}
+
+/// Synthetic comparison fixture only. Refuses populated/existing schemas rather
+/// than downgrading them; production always uses initDb/ensureSchema.
+pub fn initSchema2Fixture(path: [:0]const u8) !sqlite.Db {
+    var db = try sqlite.Db.init(.{ .mode = .{ .File = path }, .open_flags = .{ .write = true, .create = true } });
+    errdefer db.deinit();
+    if (try queryInt(&db, "SELECT COUNT(*) FROM sqlite_schema WHERE type='table'") != 0) return error.FixtureRequiresEmptyDatabase;
+    try rawExec(&db, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000; BEGIN IMMEDIATE");
+    errdefer record.rollback(&db);
+    try migrateInitial(&db);
+    try rawExec(&db, "ALTER TABLE history ADD COLUMN event_id TEXT; CREATE UNIQUE INDEX idx_history_event ON history(event_id); PRAGMA user_version=2; COMMIT");
+    return db;
 }

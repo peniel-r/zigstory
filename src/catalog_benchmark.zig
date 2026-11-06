@@ -60,7 +60,7 @@ pub fn main(init: std.process.Init) !void {
             std.Io.Dir.cwd().deleteFile(init.io, extra) catch {};
         }
     };
-    var db = try zigstory.db.initDb(disk_fixture orelse ":memory:");
+    var db = try zigstory.db.initSchema2Fixture(disk_fixture orelse ":memory:");
     defer db.deinit();
     try db.exec(
         \\WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<100000)

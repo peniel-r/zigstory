@@ -1,5 +1,4 @@
-//! Experimental schema-3 catalog. NOT called by production startup.
-//! Only disposable schema-2 fixtures are migrated until integration is reviewed.
+//! Schema-3 normalized catalog and exponential frecency.
 const std = @import("std");
 const sqlite = @import("sqlite");
 const recording = @import("record.zig");
@@ -87,24 +86,18 @@ fn integer(db: *sqlite.Db, comptime sql: []const u8, values: anytype) !i64 {
     return (try rows.next(.{})) orelse error.MissingCatalogMetadata;
 }
 
-fn write(db: *sqlite.Db, comptime sql: []const u8, values: anytype) !void {
-    var statement = try db.prepareDynamic(sql);
-    defer statement.deinit();
-    // sqlite3_reset reports the preceding step error; exec already propagates it.
-    defer {
-        _ = sqlite.c.sqlite3_reset(statement.stmt);
-        _ = sqlite.c.sqlite3_clear_bindings(statement.stmt);
-    }
-    try statement.exec(.{}, values);
-}
-
-fn checkPolicy(db: *sqlite.Db) !void {
+pub fn checkPolicy(db: *sqlite.Db) !void {
     if (try integer(db, "SELECT COUNT(*) FROM pragma_table_info('catalog_metadata') WHERE name='layout_version'", .{}) == 0 or
         try integer(db, "SELECT layout_version FROM catalog_metadata WHERE id=1", .{}) != 2)
         return error.UnsupportedCatalogLayout;
     if (try integer(db, "SELECT half_life_seconds FROM catalog_metadata WHERE id=1", .{}) != @as(i64, @intFromFloat(half_life_seconds)) or
         try integer(db, "SELECT ranking_version FROM catalog_metadata WHERE id=1", .{}) != 1)
         return error.UnsupportedRankingPolicy;
+}
+
+pub fn checkSchema(db: *sqlite.Db) !void {
+    if (try integer(db, "PRAGMA user_version", .{}) != version) return error.UnsupportedCatalogVersion;
+    try checkPolicy(db);
 }
 
 /// Atomic experimental migration from schema 2; other versions are refused.
@@ -120,6 +113,14 @@ pub fn migratePrototype(db: *sqlite.Db) !void {
         return;
     }
     if (old_version != 2) return error.PrototypeRequiresSchema2;
+    try convertSchema2(db);
+    try exec(db, "COMMIT");
+}
+
+/// Caller holds the migration transaction, allowing version-0/1 upgrades to roll
+/// back to their original state if any normalized-schema conversion fails.
+pub fn convertSchema2(db: *sqlite.Db) !void {
+    try registerAggregates(db);
     // Reject malformed timestamps rather than silently changing legacy metadata.
     if (try integer(db, "SELECT COUNT(*) FROM history WHERE timestamp IS NOT NULL AND typeof(timestamp) != 'integer'", .{}) != 0)
         return error.InvalidLegacyTimestamp;
@@ -179,62 +180,24 @@ pub fn migratePrototype(db: *sqlite.Db) !void {
         \\DROP TABLE IF EXISTS history_fts;
         \\DROP TABLE IF EXISTS command_stats;
         \\DROP TABLE history;
+        \\CREATE VIEW history AS SELECT e.id,c.cmd,d.cwd,e.exit_code,e.duration_ms,
+        \\ e.session_id,e.hostname,e.timestamp,e.event_id FROM history_events e
+        \\ JOIN commands c ON c.id=e.command_id JOIN directories d ON d.id=e.directory_id;
         \\PRAGMA user_version=3;
     );
     if (try integer(db, "SELECT COUNT(*) FROM pragma_foreign_key_check", .{}) != 0) return error.CatalogIntegrityError;
-    try exec(db, "COMMIT");
+    try checkPolicy(db);
 }
 
-/// Prototype recording path; one caller-owned event transaction, no batching.
+/// Convenience transaction wrapper; bulk imports reuse recording.Writer instead.
 pub fn record(db: *sqlite.Db, entry: recording.Entry) !bool {
-    if (entry.cmd.len == 0) return error.EmptyCommand;
-    if (entry.cwd.len == 0) return error.EmptyPath;
-    if (entry.duration_ms < 0) return error.InvalidDuration;
-    if (entry.timestamp < 0) return error.InvalidTimestamp;
-    if (entry.event_id) |id| if (id.len == 0) return error.EmptyEventId;
+    var writer = try recording.Writer.init(db);
+    defer writer.deinit();
     try exec(db, "BEGIN IMMEDIATE");
     errdefer recording.rollback(db);
-    if (try integer(db, "PRAGMA user_version", .{}) != version) return error.UnsupportedCatalogVersion;
-    try checkPolicy(db);
-    if (entry.event_id) |id| {
-        if (try integer(db, "SELECT COUNT(*) FROM history_events WHERE event_id=?", .{id}) > 0) {
-            try exec(db, "COMMIT");
-            return false;
-        }
-    }
-    try write(db, "INSERT INTO directories(cwd) VALUES(?) ON CONFLICT(cwd) DO NOTHING", .{entry.cwd});
-    const directory = try integer(db, "SELECT id FROM directories WHERE cwd=? COLLATE BINARY", .{entry.cwd});
-    try write(db,
-        \\INSERT INTO commands(cmd,frequency,success_count,score_key) VALUES(?,0,0,?) ON CONFLICT(cmd) DO NOTHING
-    , .{ entry.cmd, unknown_score_key });
-    const Current = struct { id: i64, score_key: f64, last_used: ?i64, latest_history_id: ?i64 };
-    const current = blk: {
-        var stmt = try db.prepare("SELECT id,score_key,last_used,latest_history_id FROM commands WHERE cmd=? COLLATE BINARY");
-        defer stmt.deinit();
-        var rows = try stmt.iterator(Current, .{entry.cmd});
-        break :blk (try rows.next(.{})) orelse return error.MissingCatalogMetadata;
-    };
-    try write(db, "INSERT INTO history_events(command_id,directory_id,exit_code,duration_ms,session_id,hostname,timestamp,event_id) VALUES(?,?,?,?,?,?,?,?)", .{
-        current.id, directory, entry.exit_code, entry.duration_ms, entry.session_id, entry.hostname, entry.timestamp, entry.event_id,
-    });
-    const event = sqlite.c.sqlite3_last_insert_rowid(db.db);
-    const newest = current.last_used == null or entry.timestamp > current.last_used.? or
-        (entry.timestamp == current.last_used.? and event > (current.latest_history_id orelse std.math.minInt(i64)));
-    try write(db, "UPDATE commands SET frequency=frequency+1,success_count=success_count+?,score_key=?,last_used=?,latest_history_id=? WHERE id=?", .{
-        @as(i64, if (entry.exit_code == 0) 1 else 0),       addScore(current.score_key, entry.timestamp),
-        if (newest) entry.timestamp else current.last_used, if (newest) event else current.latest_history_id,
-        current.id,
-    });
-    try write(db,
-        \\INSERT INTO command_locations(command_id,directory_id,last_used,latest_history_id) VALUES(?,?,?,?)
-        \\ ON CONFLICT(command_id,directory_id) DO UPDATE SET
-        \\ latest_history_id=CASE WHEN last_used IS NULL OR excluded.last_used>last_used OR
-        \\ (excluded.last_used=last_used AND excluded.latest_history_id>latest_history_id)
-        \\ THEN excluded.latest_history_id ELSE latest_history_id END,
-        \\ last_used=CASE WHEN last_used IS NULL OR excluded.last_used>last_used THEN excluded.last_used ELSE last_used END
-    , .{ current.id, directory, entry.timestamp, event });
+    const inserted = try writer.record(entry, std.heap.page_allocator, entry.timestamp);
     try exec(db, "COMMIT");
-    return true;
+    return inserted;
 }
 
 /// Explicit prototype repair after unsupported direct SQL event mutations.
@@ -280,9 +243,9 @@ pub fn matchIds(db: *sqlite.Db, query: []const u8, cwd: ?[]const u8, allocator: 
     return results.toOwnedSlice(allocator);
 }
 
-const Selection = struct { sql: []u8, pattern: []u8, phrase: []u8, use_fts: bool };
+pub const Selection = struct { sql: []u8, pattern: []u8, phrase: []u8, use_fts: bool };
 
-fn selectionSql(query: []const u8, cwd: ?[]const u8, scratch: std.mem.Allocator) !Selection {
+pub fn selectionSql(query: []const u8, cwd: ?[]const u8, scratch: std.mem.Allocator) !Selection {
     var pattern: std.ArrayListUnmanaged(u8) = .empty;
     try pattern.append(scratch, '%');
     for (query) |byte| {

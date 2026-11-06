@@ -1,10 +1,11 @@
-# Experimental distinct-command catalog
+# Schema-3 distinct-command catalog
 
-**Status:** disposable schema-3 prototype, November 5, 2026. Production remains
-schema 2. Neither normal startup nor safe-upgrade calls this migration.
+**Status:** reviewed prototype integrated into production code, November 6, 2026;
+not installed by the agent. Startup now atomically upgrades versions 0/1/2 to 3.
 
-The reviewed prompt-launch work is committed as `cb51319`. This prototype is a
-separate, uncommitted validation step before rewriting production SQL.
+The reviewed prototype is committed as `d4049cf`; the user also approved committing
+production integration on November 6. The comparison benchmark still creates only disposable
+fixtures; it never opens an existing input database.
 
 ## Data model
 
@@ -32,7 +33,7 @@ The migration rebuilds counts from actual events, not possibly incomplete legacy
 events were deleted, and rejects duplicate event identities or malformed timestamp
 metadata instead of discarding/changing events. All schema changes commit together.
 
-## Proposed ranking policy — review required
+## Approved ranking policy
 
 Every execution contributes weight 1 that decays with a **30-day half-life**:
 
@@ -120,17 +121,20 @@ allocation peak was about 8 MiB. The separate regression script exercises both
 fixtures. Storage savings still depend on real text/path lengths and repetition,
 not a universal fixed percentage.
 
-## Before enabling schema 3
+## Production integration and deployment gate
 
-1. Review the 30-day exponential ranking policy and migration storage tradeoff.
-2. Integrate normalized reads/writes into CLI, TUI, imports and predictor; retain
-   immediate recording and reusable statements for batch imports.
-3. Implement atomic version-0/1 migration paths and schema checks in every reader.
-4. Preserve browsing (individual executions), multi-state caches, local/external
-   write invalidation and stable selection behavior.
-5. Update `maintenance`/`recalc-rank` compatibility and full upgrade, rollback,
-   package and performance gates. Older executables must refuse schema 3.
-6. Require a quiet backup-aware deployment; rollback restores the entire original
+1. The user approved the 30-day exponential policy and normalized layout.
+2. CLI/imports share a prepared normalized writer; per-event rank/hash rewrites are
+   removed. TUI uses catalog candidates with its existing per-state TEMP caches.
+3. Versions 0/1/2 migrate in one transaction. Predictor detects committed schema
+   changes, validates layout/policy and reads legacy layouts without writing them.
+4. Browsing retains individual executions. Query clearing, complete counts, stable
+   IDs, directory filters and local/external cache invalidation are tested.
+5. `history` is a read-only compatibility view; `maintenance` repairs catalog/FTS,
+   and `recalc-rank` remains an alias. The schema upgrade test builds the actual
+   prior binary, verifies refusal after migration and byte-identical rollback.
+6. Deployment still requires review and a quiet backup-aware upgrade. Rollback restores the entire original
    database directory, never just an old executable over a newer WAL/database.
 
-No installed history has been migrated, and no production schema change is active.
+No installed history has been migrated by the agent. New builds use schema 3;
+old installed copies do not acquire these changes until explicitly upgraded.

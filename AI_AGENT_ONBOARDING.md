@@ -2,6 +2,15 @@
 
 **Version 1.0.0** | **Last Updated: 2026-05-19**
 
+> **Schema-3 integration update (November 6):** Root `README.md`, `PLAN.md` and
+> `docs/catalog-prototype.md` are authoritative for normalized commands/directories,
+> `history_events`, trigram searches, exponential 30-day decay and atomic upgrades.
+> The detailed schema/ranking examples below describe the legacy schema-2 design.
+> `db/record.zig` now owns the reusable normalized writer, `db/catalog.zig` the
+> catalog, and `db/legacy_schema.zig` exists only for legacy migration/fixtures.
+> `history` is a read-only compatibility view; obsolete `ranking.zig` APIs were
+> retired. Production integration must be reviewed before deployment.
+
 ---
 
 ## Table of Contents

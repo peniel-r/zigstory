@@ -1,19 +1,18 @@
 const std = @import("std");
 const sqlite = @import("sqlite");
+const zigstory = @import("zigstory");
 const search = @import("tui/search.zig");
 
 pub fn main(init: std.process.Init) !void {
     const allocator = std.heap.smp_allocator;
-    var db = try sqlite.Db.init(.{ .mode = .Memory, .open_flags = .{ .write = true, .create = true } });
+    var db = try zigstory.db.initSchema2Fixture(":memory:");
     defer db.deinit();
-    try db.exec("CREATE TABLE history(id INTEGER PRIMARY KEY, cmd TEXT, cwd TEXT, exit_code INTEGER, duration_ms INTEGER, timestamp INTEGER)", .{}, .{});
     try db.exec(
         \\WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i < 100000)
-        \\INSERT INTO history SELECT i, printf('cmd %06d',i % 25000),
+        \\INSERT INTO history(id,cmd,cwd,exit_code,duration_ms,timestamp) SELECT i, printf('cmd %06d',i % 25000),
         \\ CASE WHEN i % 2 = 0 THEN 'local' ELSE 'other' END, 0, 0, i % 70000 FROM n
     , .{}, .{});
-    try db.exec("CREATE INDEX idx_history_time ON history(timestamp DESC,id DESC)", .{}, .{});
-    try db.exec("CREATE INDEX idx_history_cwd_time ON history(cwd,timestamp DESC,id DESC)", .{}, .{});
+    try zigstory.db.ensureSchema(&db);
     var state = search.SearchState.init(allocator);
     defer state.deinit(allocator);
     try state.query.appendSlice(allocator, "cmd ");

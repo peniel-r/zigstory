@@ -1,7 +1,7 @@
 # zigstory — Functional Tests
 
 This folder contains the PowerShell 7 functional, JSON, recording, asynchronous
-recording, safe-upgrade and logging regression suites. The runner executes all six;
+recording, fzf, safe-upgrade and logging regression suites. The runner executes all seven;
 Zig core/TUI and predictor tests run separately.
 
 The runner also runs `async_recording_regressions.ps1`: it publishes a fresh helper
@@ -244,7 +244,7 @@ directory on exit.  No existing user data is touched.
 
 ## November cleanup coverage
 
-### Experimental catalog (not production startup)
+### Schema-3 catalog and migration
 
 `zig build test` also runs `src/catalog_tests.zig` against disposable databases.
 To build/run the separate synthetic schema comparison:
@@ -254,10 +254,25 @@ zig build catalog-prototype -Doptimize=ReleaseFast
 pwsh -NoProfile -File tests\catalog_regressions.ps1
 ```
 
-The separate script checks exclusive file creation/refusal, result equivalence,
-storage, file-backed allocation peak and cleanup. It is not part of the production
-PowerShell runner yet. See `docs\catalog-prototype.md` for proposed ranking,
-benchmark scope and the integration/deployment work still required.
+The separate benchmark script checks exclusive file creation/refusal, result
+equivalence, storage, allocation peak and cleanup. Production startup now upgrades
+versions 0/1/2 atomically to 3; core tests cover rollback and normalized writer,
+cache/browse/filter behavior, >50k matches and bounded memory.
+
+Additional actual-binary checks (Zig 0.16 and SDK required):
+
+```powershell
+dotnet run --project tests\predictor\PredictorRegressionTests.csproj -c Release -- --schema3-check "$PWD\zig-out\bin\zigstory.exe"
+pwsh -NoProfile -File tests\schema_upgrade_regressions.ps1
+```
+
+The schema-upgrade script archives/builds `cb51319` in a disposable directory,
+copies prepared dependencies without altering the repository, and tests old-binary
+refusal after a real migration plus byte-identical rollback to the original schema-2
+database/executable. The predictor check spans a live migration and verifies
+score ordering, cache invalidation and unsupported schema/policy refusal.
+The fzf suite uses a native fake executable to verify complete multiline/Unicode
+commands and leading/trailing whitespace survive NUL-delimited selection.
 
 The obsolete `db_test.zig`, `add_test.zig`, `write_test.zig`, `import_test.zig`,
 and `ranking_perf_test.zig` were not wired into the build and used pre-0.16 APIs.

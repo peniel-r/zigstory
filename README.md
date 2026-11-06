@@ -20,16 +20,16 @@
 ### 🧠 **AI-Powered Predictions**
 
 - **Ghost text suggestions** as you type (powered by custom C# `ICommandPredictor`)
-- **LRU caching** invalidated after committed history or rank changes
+- **LRU caching** invalidated after committed events, scores or schema changes
 - **Cancellable SQLite queries** avoid finishing obsolete predictions
 - **Adaptive prefix queries** favor text indexes for selective prefixes and ranking for broad prefixes
-- **Advanced frecency ranking** based on frequency and recency scoring
+- **Exponentially decayed frecency** with a 30-day half-life and time-invariant score keys
 - **Connection pooling** for optimal database performance
 - **Background read-only connection warm-up** when the profile registers the predictor
 
 ### 🔍 **Interactive Search**
 
-- **Built-in TUI** with real-time substring search (uses LIKE queries for reliability)
+- **Built-in TUI** with trigram-indexed substring search and a final literal LIKE check
 - **Virtual scrolling** handles massive histories efficiently
 - **Multi-select** commands for piped execution (up to 5 commands)
 - **Keyboard navigation** (↑/↓ or Ctrl+P/Ctrl+N, Ctrl+K/J for page navigation)
@@ -51,7 +51,7 @@
 - **Automatic duplicate detection** during imports
 - **SQL injection protection** with parameterized queries
 - **Graceful error handling** prevents shell disruption
-- **FTS5 support** maintained for future enhancements (current TUI uses LIKE queries)
+- **FTS5 trigram index** over distinct command text; short queries scan the catalog
 
 ## 🏗️ Architecture
 
@@ -305,8 +305,9 @@ Copy-Item .\scripts\zsprofile.ps1 $profileScript -Force
 ```
 
 Open a normal PowerShell session afterward. Install the executable **before** the
-script: the updated hook requires `import --consume`. Schema version 2 adds an
-event identity for safe retries; older version-1 binaries cannot open it. Restore
+script: the updated hook requires `import --consume`. Schema version 3 normalizes
+commands/directories and replaces fixed ranks with decay keys; older schema-2
+binaries cannot open it. Restore
 the database backup as well as the old executable if rolling back. This update
 does not change predictor DLLs.
 
@@ -432,13 +433,13 @@ added. Duplicates created by earlier versions are not removed. Lines ending in a
 backtick continue on the next line, as in PSReadLine.
 
 Single-command recording and both import paths update history, command statistics,
-and new-entry ranks in one transaction. JSON imports require a nonempty `cmd`;
+and decayed command scores in one transaction. JSON imports require a nonempty `cmd`;
 `cwd`, `exit_code`, and `duration_ms` default to the current directory, 0, and 0.
 Malformed or out-of-range fields reject the batch rather than skipping entries.
 Optional `timestamp` (Unix seconds), `session_id`, `hostname`, and `event_id` retain
 recorded execution metadata. Without them, the existing import-time/default
 behavior is preserved. Durations and timestamps must be nonnegative. Reimporting
-an `event_id` is a no-op for history, frequency, and rank; JSON without event IDs
+an `event_id` is a no-op for history, frequency, and score; JSON without event IDs
 continues allowing repeated imports.
 
 ### Diagnostic logging
@@ -558,10 +559,10 @@ isolated console; see [`docs/vaxis-windows-stop.md`](docs/vaxis-windows-stop.md)
 Substring searches materialize deduplicated IDs in a SQLite TEMP table once per
 query or detected database change. Indexed page seeks avoid repeating grouping
 and deep OFFSET scans; command strings remain page-bounded, but TEMP storage grows
-with match count. A small SQLite aggregate selects the ID at max(timestamp, ID)
-per exact command without the window-function partition sort. On the local
-100k-row/25k-distinct fixture, initial-query median improved from about 60 ms to
-32 ms; deep-page median remains about 0.04 ms (42.68 ms before caching).
+with match count. Schema 3 stores latest event links in the catalog, uses trigram
+candidates with a final literal check, and preserves directory-scoped latest links.
+The schema-2 aggregate previously took about 32 ms on the 100k/25k fixture;
+the integrated schema-3 path measured about 5.7 ms, with ~0.05 ms deep pages.
 Headless rendering also uses bulk fills, skips unchanged frames, and truncates and
 highlights complete Unicode graphemes using terminal-cell widths.
 
@@ -572,7 +573,8 @@ Host launch/loading/scheduling cost remains; the baseline does not identify a
 specific OS/security component or justify changing security settings.
 Immediate recording is unchanged; no batching or persistent writer is introduced.
 New PSReadLine imports now preserve oldest-to-newest chronology; existing imported
-timestamps are not rewritten. These optimizations add no persistent schema change.
+timestamps are not rewritten. Schema 3 does change persistent storage; keep the
+complete pre-upgrade database backup when rolling back to a schema-2 executable.
 
 For this upgrade, rebuild the Zig executable and use `just safe-upgrade` from a
 quiet `pwsh -NoProfile` session. The recipe publishes and replaces the predictor
@@ -646,7 +648,8 @@ non-ASCII characters, so it parses correctly whatever encoding the reader assume
 
 #### `zigstory recalc-rank`
 
-Recalculate frecency ranks for all commands in history.
+Compatibility alias for explicit catalog and search-index repair. Scores decay
+without periodically rewriting event rows.
 
 ```powershell
 zigstory recalc-rank
@@ -654,15 +657,15 @@ zigstory recalc-rank
 
 **Features:**
 
-- Updates rank values based on current frequency and recency
-- Uses formula: `rank = (frequency * 2.0) + (100.0 / days_since_last_use)`
-- Progress tracking for large histories
-- Batch execution for performance
-- Rebuilds incomplete command statistics and handles gaps in history IDs
+- Rebuilds lifetime counts, success counts, latest event links and directory locations
+- Recomputes log-space scores from execution timestamps and validates trigram FTS
+- Keeps stable event/command identities, including gaps in history IDs
+- Uses `sum(2 ** ((execution_timestamp - now) / (30 * 86400)))`; the stored log key
+  omits the common current-time term, so ranking needs no timer or daily rewrite
 
 #### `zigstory maintenance`
 
-Rebuild and validate the FTS index, then run SQLite's `PRAGMA optimize`. Normal
+Repair catalog metadata, rebuild/validate trigram FTS, then run SQLite's `PRAGMA optimize`. Normal
 startup checks the schema version rather than scanning history or retrying ALTERs.
 Existing databases receive a transactional, one-time migration; newer unsupported
 schema versions are rejected without downgrading.
@@ -671,9 +674,10 @@ schema versions are rejected without downgrading.
 zigstory maintenance
 ```
 
-FTS triggers continue maintaining inserts, command edits, ID changes, and deletes.
-Rank/hash-only updates no longer rewrite FTS entries. Use this explicit command
-after suspected FTS inconsistency; rank/statistics repair remains `recalc-rank`.
+FTS triggers maintain distinct command inserts, text edits and deletes. Score and
+count updates do not rewrite FTS entries. Direct event-table edits require explicit
+repair; `recalc-rank` invokes the same operation. The `history` compatibility view
+is read-only and no longer exposes obsolete per-event rank/hash columns.
 PowerShell recording remains immediate, without a new batching delay.
 
 #### `zigstory help`
@@ -692,9 +696,9 @@ Representative local ReleaseFast measurements, not universal latency promises:
 
 | Measurement | Result |
 | --- | --- |
-| 100k rows / 25k distinct substring matches, initial median | ~32 ms |
-| Cached deep-page median | ~0.04 ms |
-| Result-string arena on that fixture | 22,412 bytes |
+| 100k events / 25k distinct substring matches, schema-3 initial median | ~5.7 ms |
+| Cached deep-page median | ~0.05 ms |
+| Result-string arena on that fixture | 39,556 bytes |
 | Actual 100x30 ConPTY first-frame tty render/flush | ~0.23 ms |
 | Launch-to-first-frame in that ConPTY sample | ~127 ms |
 
@@ -723,12 +727,12 @@ See [docs/plan.md](docs/plan.md) for the detailed development roadmap.
 - ✅ Clipboard integration
 - ✅ Performance targets met
 
-**Phase 5 initial feature set complete** - Further decay and search improvements
-are planned separately; existing ranking does not decay until `recalc-rank` runs:
+**Schema 3 integration** - Normalized storage, trigram searches and exponential
+decay are implemented; deployment must use a quiet backup-aware upgrade:
 
 - ✅ **Frecency Algorithm**: Hybrid frequency/recency scoring implemented
 - ✅ **Real-time Ranking**: Ranks calculated on every command execution
-- ✅ **Batch Recalculation**: `zigstory recalc-rank` command for re-ranking history
+- ✅ **Explicit Repair**: `zigstory recalc-rank` compatibility alias for catalog repair
 - ✅ **Detailed Stats**: `zigstory stats` command with local-time text bar charts
 - ✅ **fzf Integration**: `zigstory fzf` command with Ctrl+F binding
 - ✅ **Performance**: Local correctness, latency and memory regression gates
@@ -766,46 +770,48 @@ dotnet build src/predictor/zigstoryPredictor.csproj
 
 ## 📊 Database Schema
 
-The SQLite database uses the following schema:
+Schema 3 stores exact command text and paths once. Events retain original row/event
+IDs and all execution metadata. Migration from versions 0/1/2 is transactional.
 
 ```sql
--- Main history table
-CREATE TABLE history (
+CREATE TABLE commands (
+    id INTEGER PRIMARY KEY,
+    cmd TEXT NOT NULL UNIQUE COLLATE BINARY,
+    frequency INTEGER NOT NULL,
+    success_count INTEGER NOT NULL,
+    last_used INTEGER,
+    latest_history_id INTEGER,
+    score_key REAL NOT NULL
+);
+CREATE TABLE directories (id INTEGER PRIMARY KEY, cwd TEXT NOT NULL UNIQUE COLLATE BINARY);
+CREATE TABLE history_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    cmd TEXT NOT NULL,
-    cwd TEXT NOT NULL,
+    command_id INTEGER NOT NULL REFERENCES commands(id),
+    directory_id INTEGER NOT NULL REFERENCES directories(id),
     exit_code INTEGER,
     duration_ms INTEGER,
     session_id TEXT,
     hostname TEXT,
-    timestamp INTEGER DEFAULT (strftime('%s', 'now')),
-    event_id TEXT,
-    rank REAL DEFAULT 0
+    timestamp INTEGER,
+    event_id TEXT
 );
-
-CREATE UNIQUE INDEX idx_history_event ON history(event_id);
-
--- Command statistics for frecency
-CREATE TABLE command_stats (
-    cmd_hash TEXT PRIMARY KEY,
-    cmd TEXT NOT NULL,
-    frequency INTEGER DEFAULT 1,
-    last_used INTEGER NOT NULL
-);
-
--- Index for prefix matching
-CREATE INDEX idx_cmd_prefix ON history(cmd COLLATE NOCASE);
-
--- Index for rank-based sorting
-CREATE INDEX idx_rank ON history(rank DESC, timestamp DESC);
-
--- Indexes for recent history and directory-scoped browsing/metrics
-CREATE INDEX idx_history_time ON history(timestamp DESC, id DESC);
-CREATE INDEX idx_history_cwd_time ON history(cwd, timestamp DESC, id DESC);
-
--- FTS5 virtual table for full-text search
-CREATE VIRTUAL TABLE history_fts USING fts5(cmd, content='history', content_rowid='id');
+CREATE UNIQUE INDEX idx_events_event ON history_events(event_id);
+CREATE INDEX idx_events_time ON history_events(timestamp DESC,id DESC);
+CREATE INDEX idx_events_directory_time ON history_events(directory_id,timestamp DESC,id DESC);
+CREATE INDEX idx_commands_prefix ON commands(cmd COLLATE NOCASE);
+CREATE INDEX idx_commands_score ON commands(score_key DESC,last_used DESC,latest_history_id DESC);
+CREATE TABLE command_locations (
+    command_id INTEGER NOT NULL REFERENCES commands(id),
+    directory_id INTEGER NOT NULL REFERENCES directories(id),
+    last_used INTEGER, latest_history_id INTEGER NOT NULL,
+    PRIMARY KEY(command_id,directory_id)
+) WITHOUT ROWID;
+CREATE VIRTUAL TABLE commands_fts USING fts5(cmd, content='commands', content_rowid='id', tokenize='trigram');
+-- A read-only history view joins events to commands/directories for compatible reads.
 ```
+
+`catalog_metadata` records layout/ranking versions and half-life; incompatible
+metadata is refused. See [the catalog design](docs/catalog-prototype.md) for details.
 
 **Database Location:** `%USERPROFILE%\.zigstory\history.db`
 

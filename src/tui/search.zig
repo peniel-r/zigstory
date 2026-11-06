@@ -2,6 +2,7 @@ const std = @import("std");
 const sqlite = @import("sqlite");
 const scrolling = @import("scrolling.zig");
 const directory_filter = @import("directory_filter.zig");
+const catalog = @import("zigstory").catalog;
 
 const Latest = extern struct { timestamp: i64, id: i64, initialized: bool };
 
@@ -42,6 +43,7 @@ pub const SearchState = struct {
     cache_version: i64 = 0,
     cache_changes: c_int = 0,
     cache_count: usize = 0,
+    catalog_mode: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) SearchState {
         return .{ .results_arena = .init(allocator) };
@@ -71,6 +73,16 @@ pub const SearchState = struct {
         self.results = &.{};
         _ = self.results_arena.reset(.retain_capacity);
         const allocator = self.results_arena.allocator();
+        const schema = blk: {
+            var schema_stmt = try db.prepare("PRAGMA user_version");
+            defer schema_stmt.deinit();
+            var schema_rows = try schema_stmt.iterator(i64, .{});
+            break :blk (try schema_rows.next(.{})).?;
+        };
+        if (schema > catalog.version) return error.UnsupportedSchemaVersion;
+        const mode = schema == catalog.version;
+        if (mode != self.catalog_mode) self.cache_valid = false;
+        self.catalog_mode = mode;
 
         if (self.query.items.len == 0) {
             self.dropCache(self.results_arena.child_allocator);
@@ -100,6 +112,26 @@ pub const SearchState = struct {
     fn fetch(self: *SearchState, db: *sqlite.Db, comptime where: []const u8, values: anytype, limit: usize, offset: usize, recount: bool) !void {
         const searching = self.query.items.len > 0;
         if (searching) return self.fetchSearch(db, where, values, limit, offset, recount);
+        if (self.catalog_mode) {
+            const directory_where = if (where.len > 0) " WHERE e.directory_id=(SELECT id FROM directories WHERE cwd=?)" else "";
+            if (recount) {
+                var count_stmt = try db.prepareDynamic("SELECT COUNT(*) FROM history_events e" ++ directory_where);
+                defer count_stmt.deinit();
+                var counts = try count_stmt.iterator(i64, values);
+                self.total_count = @intCast((try counts.next(.{})).?);
+            }
+            var stmt = try db.prepareDynamic("SELECT e.id,c.cmd,d.cwd,e.exit_code,e.duration_ms,e.timestamp FROM history_events e " ++
+                "CROSS JOIN commands c ON c.id=e.command_id CROSS JOIN directories d ON d.id=e.directory_id" ++ directory_where ++
+                " ORDER BY e.timestamp DESC,e.id DESC LIMIT ? OFFSET ?");
+            defer stmt.deinit();
+            var rows = try stmt.iterator(scrolling.HistoryEntry, values ++ .{ @as(i64, @intCast(limit)), @as(i64, @intCast(offset)) });
+            const allocator = self.results_arena.allocator();
+            var results: std.ArrayListUnmanaged(scrolling.HistoryEntry) = .empty;
+            while (try rows.nextAlloc(allocator, .{})) |row| try results.append(allocator, row);
+            self.results = try results.toOwnedSlice(allocator);
+            self.results_offset = offset;
+            return;
+        }
         if (recount) {
             const count_sql = "SELECT COUNT(*) AS count FROM history" ++ where;
             var count_stmt = try db.prepareDynamic(count_sql);
@@ -150,13 +182,24 @@ pub const SearchState = struct {
             try db.execDynamic(delete_sql, .{}, .{});
             // Materialize only IDs once, not command strings on every page. The
             // integer primary key supports indexed absolute paging without OFFSET.
-            const sql = try std.fmt.allocPrintSentinel(allocator, "INSERT INTO temp.{s}(history_id) " ++
-                "SELECT zigstory_latest_id(id,timestamp) AS latest_id FROM history" ++ where ++
-                " GROUP BY cmd ORDER BY MAX(timestamp) DESC,latest_id DESC", .{self.cache_table.?}, 0);
-            defer allocator.free(sql);
-            var insert = try db.prepareDynamic(sql);
-            defer insert.deinit();
-            try insert.exec(.{}, values);
+            if (self.catalog_mode) {
+                const selection = try catalog.selectionSql(self.query.items, if (self.filter_state.isActive()) self.filter_state.current_dir else null, self.results_arena.allocator());
+                const sql = try std.fmt.allocPrintSentinel(allocator, "INSERT INTO temp.{s}(history_id) {s}", .{ self.cache_table.?, selection.sql }, 0);
+                defer allocator.free(sql);
+                var insert = try db.prepareDynamic(sql);
+                defer insert.deinit();
+                if (selection.use_fts) {
+                    if (self.filter_state.isActive()) try insert.exec(.{}, .{ selection.pattern, selection.phrase, self.filter_state.current_dir.? }) else try insert.exec(.{}, .{ selection.pattern, selection.phrase });
+                } else if (self.filter_state.isActive()) try insert.exec(.{}, .{ selection.pattern, self.filter_state.current_dir.? }) else try insert.exec(.{}, .{selection.pattern});
+            } else {
+                const sql = try std.fmt.allocPrintSentinel(allocator, "INSERT INTO temp.{s}(history_id) " ++
+                    "SELECT zigstory_latest_id(id,timestamp) AS latest_id FROM history" ++ where ++
+                    " GROUP BY cmd ORDER BY MAX(timestamp) DESC,latest_id DESC", .{self.cache_table.?}, 0);
+                defer allocator.free(sql);
+                var insert = try db.prepareDynamic(sql);
+                defer insert.deinit();
+                try insert.exec(.{}, values);
+            }
             self.cache_count = @intCast(sqlite.c.sqlite3_changes(db.db));
             self.cache_changes = sqlite.c.sqlite3_total_changes(db.db);
             self.cache_version = version;

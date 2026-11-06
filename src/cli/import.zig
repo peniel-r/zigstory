@@ -243,9 +243,9 @@ pub fn importHistory(
     return importHistoryFile(db, history_path, cwd, allocator, io, true);
 }
 
-/// Counts stored rows for an exact command. The NOCASE comparison lets SQLite
-/// narrow the search with idx_cmd_prefix before the exact (binary) comparison.
-pub const existing_count_sql = "SELECT COUNT(*) FROM history WHERE cmd = ? COLLATE NOCASE AND cmd = ?";
+/// Read the exact command's maintained occurrence count from the catalog instead
+/// of rescanning all execution rows. Both bound values are kept for call compatibility.
+pub const existing_count_sql = "SELECT COALESCE((SELECT frequency FROM commands WHERE cmd=? COLLATE BINARY AND cmd=?),0)";
 
 /// Import a PSReadLine history file. The file has no timestamps, so occurrences
 /// are reconciled per command: when history already holds N rows for a command,

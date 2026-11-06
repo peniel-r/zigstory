@@ -5,7 +5,8 @@ const output = @import("output.zig");
 /// Buckets history by local hour of day; SQLite's 'localtime' applies the system time zone.
 pub const hourly_sql =
     \\SELECT strftime('%H', timestamp, 'unixepoch', 'localtime') as hour, COUNT(*) as count
-    \\FROM history
+    \\FROM history_events
+    \\WHERE timestamp IS NOT NULL AND strftime('%H', timestamp, 'unixepoch', 'localtime') IS NOT NULL
     \\GROUP BY hour
     \\ORDER BY hour
 ;
@@ -63,7 +64,7 @@ fn write(w: *std.Io.Writer, db: *sqlite.Db, allocator: std.mem.Allocator, io: st
 }
 
 fn getTotalCommands(db: *sqlite.Db) !i64 {
-    var stmt = try db.prepare("SELECT COUNT(*) as count FROM history");
+    var stmt = try db.prepare("SELECT COUNT(*) as count FROM history_events");
     defer stmt.deinit();
 
     var iter = try stmt.iterator(struct { count: i64 }, .{});
@@ -74,7 +75,7 @@ fn getTotalCommands(db: *sqlite.Db) !i64 {
 }
 
 fn getUniqueCommands(db: *sqlite.Db) !i64 {
-    var stmt = try db.prepare("SELECT COUNT(DISTINCT cmd) as count FROM history");
+    var stmt = try db.prepare("SELECT COUNT(*) as count FROM commands");
     defer stmt.deinit();
 
     var iter = try stmt.iterator(struct { count: i64 }, .{});
@@ -94,7 +95,7 @@ fn getSessionStats(db: *sqlite.Db) !SessionStats {
     // Count sessions
     var count: i64 = 0;
     {
-        var stmt = try db.prepare("SELECT COUNT(DISTINCT session_id) as count FROM history");
+        var stmt = try db.prepare("SELECT COUNT(DISTINCT session_id) as count FROM history_events");
         defer stmt.deinit();
         var iter = try stmt.iterator(struct { count: i64 }, .{});
         if (try iter.next(.{})) |row| {
@@ -106,7 +107,7 @@ fn getSessionStats(db: *sqlite.Db) !SessionStats {
     var first: i64 = 0;
     var last: i64 = 0;
     {
-        var stmt = try db.prepare("SELECT MIN(timestamp) as min, MAX(timestamp) as max FROM history");
+        var stmt = try db.prepare("SELECT MIN(timestamp) as min, MAX(timestamp) as max FROM history_events");
         defer stmt.deinit();
         // Use optional i64 for nullable columns
         const Row = struct { min: ?i64, max: ?i64 };
@@ -121,7 +122,7 @@ fn getSessionStats(db: *sqlite.Db) !SessionStats {
 }
 
 fn getSuccessRate(db: *sqlite.Db) !f64 {
-    var stmt = try db.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN exit_code = 0 THEN 1 ELSE 0 END) as success FROM history");
+    var stmt = try db.prepare("SELECT COALESCE(SUM(frequency),0) as total, SUM(success_count) as success FROM commands");
     defer stmt.deinit();
 
     const Row = struct { total: i64, success: ?i64 };
@@ -137,10 +138,9 @@ fn getSuccessRate(db: *sqlite.Db) !f64 {
 
 fn printTopCommands(w: *std.Io.Writer, db: *sqlite.Db, allocator: std.mem.Allocator, io: std.Io) !void {
     const query =
-        \\SELECT cmd, COUNT(*) as count, MAX(timestamp) as last_used
-        \\FROM history
-        \\GROUP BY cmd
-        \\ORDER BY count DESC
+        \\SELECT cmd,frequency as count,COALESCE(last_used,0) as last_used
+        \\FROM commands
+        \\ORDER BY frequency DESC,last_used DESC,id DESC
         \\LIMIT 10
     ;
 
@@ -225,9 +225,8 @@ fn printHourlyDistribution(w: *std.Io.Writer, db: *sqlite.Db, allocator: std.mem
 
 fn printTopDirectories(w: *std.Io.Writer, db: *sqlite.Db, allocator: std.mem.Allocator) !void {
     const query =
-        \\SELECT cwd, COUNT(*) as count
-        \\FROM history
-        \\GROUP BY cwd
+        \\SELECT d.cwd,COUNT(*) as count FROM history_events e JOIN directories d ON d.id=e.directory_id
+        \\GROUP BY e.directory_id
         \\ORDER BY count DESC
         \\LIMIT 5
     ;
@@ -256,7 +255,8 @@ fn printTopDirectories(w: *std.Io.Writer, db: *sqlite.Db, allocator: std.mem.All
 
 fn formatRelativeTime(timestamp: i64, allocator: std.mem.Allocator, io: std.Io) ![]u8 {
     const now = std.Io.Timestamp.now(io, .real).toSeconds();
-    const diff = now - timestamp;
+    const diff = now -| timestamp;
+    if (diff < 0) return std.fmt.allocPrint(allocator, "future", .{});
 
     if (diff < 60) {
         return std.fmt.allocPrint(allocator, "{d}s ago", .{diff});

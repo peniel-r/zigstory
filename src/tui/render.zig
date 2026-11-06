@@ -46,7 +46,7 @@ pub const default_config = ColumnConfig{};
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub fn formatRelativeTime(timestamp: i64, buf: []u8, now: i64) []const u8 {
-    const diff = now - timestamp;
+    const diff = now -| timestamp;
 
     if (diff < 0) return std.fmt.bufPrint(buf, "future", .{}) catch "?";
     if (diff < 60) return std.fmt.bufPrint(buf, "{d}s ago", .{diff}) catch "now";

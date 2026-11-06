@@ -12,6 +12,7 @@ const io = std.testing.io;
 
 test {
     _ = @import("catalog_tests.zig");
+    _ = @import("schema3_tests.zig");
 }
 
 test "user database opening creates directories and sets WAL connection options" {
@@ -154,7 +155,7 @@ test "re-importing PSReadLine history is idempotent and skips commands already r
     try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "SELECT COUNT(*) FROM history WHERE cmd = 'git status'"));
     try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT COUNT(*) FROM history WHERE cmd = 'Git Status'"));
     try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "SELECT COUNT(*) FROM history WHERE cmd = 'echo one'"));
-    try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "SELECT frequency FROM command_stats WHERE cmd = 'echo one'"));
+    try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "SELECT frequency FROM commands WHERE cmd = 'echo one'"));
 }
 
 test "PSReadLine reconciliation counts use the command index" {
@@ -166,7 +167,7 @@ test "PSReadLine reconciliation counts use the command index" {
     var found = false;
     while (try rows.nextAlloc(allocator, .{})) |row| {
         defer allocator.free(row.detail);
-        found = found or std.mem.indexOf(u8, row.detail, "idx_cmd_prefix") != null;
+        found = found or std.mem.indexOf(u8, row.detail, "sqlite_autoindex_commands_1") != null;
     }
     try std.testing.expect(found);
 }
@@ -255,8 +256,8 @@ test "schema upgrades legacy history once and reopening avoids full-history scan
         var db = try zigstory.db.initDb(path);
         defer db.deinit();
         try std.testing.expectEqual(@as(i64, zigstory.db.schema_version), try scalar(&db, "PRAGMA user_version"));
-        try std.testing.expectEqual(@as(i64, 10000), try scalar(&db, "SELECT COUNT(*) FROM history_fts WHERE history_fts MATCH 'legacy'"));
-        try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "SELECT COUNT(*) FROM pragma_table_info('history') WHERE name IN ('rank','cmd_hash')"));
+        try std.testing.expectEqual(@as(i64, 10000), try scalar(&db, "SELECT COUNT(*) FROM commands_fts WHERE commands_fts MATCH 'legacy'"));
+        try std.testing.expectEqual(@as(i64, 0), try scalar(&db, "SELECT COUNT(*) FROM pragma_table_info('history_events') WHERE name IN ('rank','cmd_hash','cmd','cwd')"));
         schema = try scalar(&db, "PRAGMA schema_version");
     }
     var db = try zigstory.db.initDb(path);
@@ -273,19 +274,21 @@ test "explicit maintenance repairs FTS and metadata updates leave it untouched" 
     defer db.deinit();
     try add.addCommand(&db, .{ .cmd = "echo original", .cwd = "local", .exit_code = 0, .duration_ms = 0 }, allocator, io);
     const before = sqlite.c.sqlite3_total_changes(db.db);
-    try db.exec("UPDATE history SET rank = 123, cmd_hash = 'changed' WHERE id = 1", .{}, .{});
+    try db.exec("UPDATE commands SET score_key = 123 WHERE id = 1", .{}, .{});
     try std.testing.expectEqual(@as(c_int, 1), sqlite.c.sqlite3_total_changes(db.db) - before);
-    try db.exec("INSERT INTO history_fts(history_fts,rowid,cmd) VALUES('delete',1,'echo original')", .{}, .{});
-    try std.testing.expectEqual(@as(i64, 0), try scalar(&db, "SELECT COUNT(*) FROM history_fts WHERE history_fts MATCH 'original'"));
+    try db.exec("INSERT INTO commands_fts(commands_fts,rowid,cmd) VALUES('delete',1,'echo original')", .{}, .{});
+    try std.testing.expectEqual(@as(i64, 0), try scalar(&db, "SELECT COUNT(*) FROM commands_fts WHERE commands_fts MATCH 'original'"));
     try zigstory.db.maintain(&db);
-    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT COUNT(*) FROM history_fts WHERE history_fts MATCH 'original'"));
-    try db.exec("UPDATE history SET cmd = 'echo renamed' WHERE id = 1", .{}, .{});
-    try std.testing.expectEqual(@as(i64, 0), try scalar(&db, "SELECT COUNT(*) FROM history_fts WHERE history_fts MATCH 'original'"));
-    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT COUNT(*) FROM history_fts WHERE history_fts MATCH 'renamed'"));
-    try db.exec("UPDATE history SET id = 42 WHERE id = 1", .{}, .{});
-    try std.testing.expectEqual(@as(i64, 42), try scalar(&db, "SELECT rowid FROM history_fts WHERE history_fts MATCH 'renamed'"));
-    try db.exec("DELETE FROM history WHERE id = 42", .{}, .{});
-    try std.testing.expectEqual(@as(i64, 0), try scalar(&db, "SELECT COUNT(*) FROM history_fts WHERE history_fts MATCH 'renamed'"));
+    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT COUNT(*) FROM commands_fts WHERE commands_fts MATCH 'original'"));
+    try db.exec("UPDATE commands SET cmd = 'echo renamed' WHERE id = 1", .{}, .{});
+    try std.testing.expectEqual(@as(i64, 0), try scalar(&db, "SELECT COUNT(*) FROM commands_fts WHERE commands_fts MATCH 'original'"));
+    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT COUNT(*) FROM commands_fts WHERE commands_fts MATCH 'renamed'"));
+    try db.exec("UPDATE history_events SET id = 42 WHERE id = 1", .{}, .{});
+    try zigstory.db.maintain(&db);
+    try std.testing.expectEqual(@as(i64, 42), try scalar(&db, "SELECT latest_history_id FROM commands WHERE cmd='echo renamed'"));
+    try db.exec("DELETE FROM history_events WHERE id = 42", .{}, .{});
+    try zigstory.db.maintain(&db);
+    try std.testing.expectEqual(@as(i64, 0), try scalar(&db, "SELECT COUNT(*) FROM commands_fts WHERE commands_fts MATCH 'renamed'"));
 }
 
 test "failed migrations roll back all schema changes and preserve legacy history" {
@@ -335,7 +338,7 @@ test "time and directory indexes cover deterministic latest-entry queries" {
     for ([_][]const u8{
         "EXPLAIN QUERY PLAN SELECT * FROM history ORDER BY timestamp DESC, id DESC LIMIT 100",
         "EXPLAIN QUERY PLAN SELECT * FROM history WHERE cwd = 'C:\\repo' ORDER BY timestamp DESC, id DESC LIMIT 1",
-    }, [_][]const u8{ "idx_history_time", "idx_history_cwd_time" }) |sql, index| {
+    }, [_][]const u8{ "idx_events_time", "idx_events_directory_time" }) |sql, index| {
         var stmt = try db.prepareDynamic(sql);
         defer stmt.deinit();
         var rows = try stmt.iterator(struct { id: i64, parent: i64, unused: i64, detail: []const u8 }, .{});
@@ -358,15 +361,15 @@ test "version one databases gain event identities without changing existing hist
     {
         var db = try sqlite.Db.init(.{ .mode = .{ .File = path }, .open_flags = .{ .write = true } });
         defer db.deinit();
-        try db.exec("CREATE TABLE history (id INTEGER PRIMARY KEY, cmd TEXT)", .{}, .{});
-        try db.exec("INSERT INTO history VALUES(1,'existing')", .{}, .{});
+        try db.exec("CREATE TABLE history (id INTEGER PRIMARY KEY,cmd TEXT,cwd TEXT,exit_code INTEGER,duration_ms INTEGER,timestamp INTEGER,session_id TEXT,hostname TEXT)", .{}, .{});
+        try db.exec("INSERT INTO history VALUES(1,'existing','original',0,7,100,'s','h')", .{}, .{});
         try db.exec("PRAGMA user_version=1", .{}, .{});
     }
     var db = try zigstory.db.initDb(path);
     defer db.deinit();
-    try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "PRAGMA user_version"));
+    try std.testing.expectEqual(@as(i64, 3), try scalar(&db, "PRAGMA user_version"));
     try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT COUNT(*) FROM history WHERE cmd='existing' AND event_id IS NULL"));
-    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT COUNT(*) FROM sqlite_schema WHERE name='idx_history_event'"));
+    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT COUNT(*) FROM sqlite_schema WHERE name='idx_events_event'"));
 }
 
 test "recording imports preserve metadata and retry without incrementing history or statistics" {
@@ -383,8 +386,8 @@ test "recording imports preserve metadata and retry without incrementing history
     try std.testing.expectEqual(@as(usize, 1), (try import_history.importRecordingFile(&db, path, "default", allocator, io)).imported);
     try std.testing.expectEqual(@as(usize, 0), (try import_history.importRecordingFile(&db, path, "default", allocator, io)).imported);
     try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT COUNT(*) FROM history WHERE cwd='before' AND exit_code=7 AND duration_ms=3000000000 AND timestamp=1234567890 AND session_id='shell-session' AND hostname='shell-host'"));
-    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT frequency FROM command_stats"));
-    try std.testing.expectEqual(@as(i64, 1234567890), try scalar(&db, "SELECT last_used FROM command_stats"));
+    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT frequency FROM commands"));
+    try std.testing.expectEqual(@as(i64, 1234567890), try scalar(&db, "SELECT last_used FROM commands"));
     try tmp.dir.writeFile(io, .{ .sub_path = "event.json", .data = "[{\"cmd\":\"legacy\"}]" });
     try std.testing.expectError(error.MissingEventId, import_history.importRecordingFile(&db, path, "default", allocator, io));
     try std.testing.expectEqual(@as(usize, 1), (try import_history.importFromFile(&db, path, "default", allocator, io)).imported);
@@ -405,9 +408,9 @@ test "add updates history and statistics atomically and captures the correct row
     for ([_][]const u8{ "git status", "echo other", "git status" }) |cmd| {
         try add.addCommand(&db, .{ .cmd = cmd, .cwd = "C:\\repo", .exit_code = 0, .duration_ms = 10 }, allocator, io);
     }
-    try std.testing.expectEqual(@as(i64, 3), try scalar(&db, "SELECT COUNT(*) AS value FROM history WHERE rank > 0"));
-    try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "SELECT frequency AS value FROM command_stats WHERE cmd = 'git status'"));
-    try db.exec("CREATE TRIGGER reject_stats BEFORE INSERT ON command_stats BEGIN SELECT RAISE(ABORT, 'reject stats'); END", .{}, .{});
+    try std.testing.expectEqual(@as(i64, 3), try scalar(&db, "SELECT COUNT(*) FROM history_events e JOIN commands c ON c.id=e.command_id WHERE c.score_key>0"));
+    try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "SELECT frequency AS value FROM commands WHERE cmd = 'git status'"));
+    try db.exec("CREATE TRIGGER reject_stats BEFORE INSERT ON commands BEGIN SELECT RAISE(ABORT, 'reject stats'); END", .{}, .{});
     try std.testing.expectError(error.SQLiteConstraint, add.addCommand(&db, .{
         .cmd = "must roll back",
         .cwd = "C:\\repo",
@@ -433,15 +436,15 @@ test "JSON imports share ranking updates and roll back invalid batches" {
     defer db.deinit();
     const result = try import_history.importFromFile(&db, path, "C:\\default", allocator, io);
     try std.testing.expectEqual(@as(usize, 3), result.imported);
-    try std.testing.expectEqual(@as(i64, 3), try scalar(&db, "SELECT COUNT(*) AS value FROM history WHERE rank > 0"));
-    try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "SELECT frequency AS value FROM command_stats WHERE cmd = 'git status'"));
+    try std.testing.expectEqual(@as(i64, 3), try scalar(&db, "SELECT COUNT(*) FROM history_events e JOIN commands c ON c.id=e.command_id WHERE c.score_key>0"));
+    try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "SELECT frequency AS value FROM commands WHERE cmd = 'git status'"));
     try tmp.dir.writeFile(io, .{
         .sub_path = "batch.json",
         .data = "[{\"cmd\":\"valid\"},{\"cmd\":\"\"}]",
     });
     try std.testing.expectError(error.EmptyCommand, import_history.importFromFile(&db, path, "C:\\default", allocator, io));
     try std.testing.expectEqual(@as(i64, 3), try scalar(&db, "SELECT COUNT(*) AS value FROM history"));
-    try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "SELECT COUNT(*) AS value FROM command_stats"));
+    try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "SELECT COUNT(*) AS value FROM commands"));
     try tmp.dir.writeFile(io, .{ .sub_path = "batch.json", .data = "[{\"cmd\":\"bad\",\"exit_code\":2147483648}]" });
     try std.testing.expectError(error.Overflow, import_history.importFromFile(&db, path, "C:\\default", allocator, io));
 }
@@ -465,8 +468,8 @@ test "older imported timestamps do not move command recency backwards" {
         }, allocator, 200000);
     }
     try db.exec("COMMIT", .{}, .{});
-    try std.testing.expectEqual(@as(i64, 200000), try scalar(&db, "SELECT last_used AS value FROM command_stats"));
-    try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "SELECT frequency AS value FROM command_stats"));
+    try std.testing.expectEqual(@as(i64, 200000), try scalar(&db, "SELECT last_used AS value FROM commands"));
+    try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "SELECT frequency AS value FROM commands"));
 }
 
 test "recalculation rebuilds partially populated statistics and handles sparse IDs" {
@@ -479,15 +482,18 @@ test "recalculation rebuilds partially populated statistics and handles sparse I
         var db = try zigstory.db.initDb(path);
         defer db.deinit();
         try add.addCommand(&db, .{ .cmd = "git status", .cwd = "C:\\repo", .exit_code = 0, .duration_ms = 0 }, allocator, io);
-        try db.exec("INSERT INTO history (id,cmd,cwd,exit_code,duration_ms,timestamp) VALUES (1000,'legacy','C:\\repo',0,0,100000)", .{}, .{});
-        try db.exec("INSERT INTO history (id,cmd,cwd,exit_code,duration_ms,timestamp) VALUES (2000,'git status','C:\\repo',0,0,100001)", .{}, .{});
+        try add.addCommand(&db, .{ .cmd = "legacy", .cwd = "C:\\repo", .exit_code = 0, .duration_ms = 0 }, allocator, io);
+        try add.addCommand(&db, .{ .cmd = "git status", .cwd = "C:\\repo", .exit_code = 0, .duration_ms = 0 }, allocator, io);
+        try db.exec("UPDATE history_events SET id=1000,timestamp=100000 WHERE id=2", .{}, .{});
+        try db.exec("UPDATE history_events SET id=2000,timestamp=100001 WHERE id=3", .{}, .{});
+        try db.exec("UPDATE commands SET frequency=999,score_key=0,latest_history_id=NULL", .{}, .{});
     }
     try recalc.recalcRanks(.{ .db_path = path, .batch_size = 1 }, allocator, io);
     try recalc.recalcRanks(.{ .db_path = path, .batch_size = 2 }, allocator, io);
     var db = try zigstory.db.initDb(path);
     defer db.deinit();
-    try std.testing.expectEqual(@as(i64, 3), try scalar(&db, "SELECT COUNT(*) AS value FROM history WHERE rank > 0"));
-    try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "SELECT frequency AS value FROM command_stats WHERE cmd = 'git status'"));
-    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT frequency AS value FROM command_stats WHERE cmd = 'legacy'"));
-    try std.testing.expectError(error.InvalidBatchSize, zigstory.ranking.recalculateAllRanks(&db, .{}, 0, null, io));
+    try std.testing.expectEqual(@as(i64, 3), try scalar(&db, "SELECT COUNT(*) FROM history_events e JOIN commands c ON c.id=e.command_id WHERE c.score_key>0"));
+    try std.testing.expectEqual(@as(i64, 2), try scalar(&db, "SELECT frequency AS value FROM commands WHERE cmd = 'git status'"));
+    try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT frequency AS value FROM commands WHERE cmd = 'legacy'"));
+    try std.testing.expectError(error.InvalidBatchSize, recalc.recalcRanks(.{ .db_path = path, .batch_size = 0 }, allocator, io));
 }

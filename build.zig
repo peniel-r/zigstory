@@ -55,6 +55,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "sqlite", .module = sqlite_mod },
                 .{ .name = "vaxis", .module = vaxis_mod },
+                .{ .name = "zigstory", .module = mod },
             },
         }),
     });
@@ -87,6 +88,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "sqlite", .module = sqlite_mod },
                 .{ .name = "vaxis", .module = vaxis_mod },
+                .{ .name = "zigstory", .module = mod },
             },
         }),
     });
@@ -139,7 +141,10 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/search_benchmark.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{.{ .name = "sqlite", .module = sqlite_mod }},
+            .imports = &.{
+                .{ .name = "sqlite", .module = sqlite_mod },
+                .{ .name = "zigstory", .module = mod },
+            },
         }),
     });
     profile_step.dependOn(&b.addInstallArtifact(search_benchmark, .{}).step);

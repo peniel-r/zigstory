@@ -21,7 +21,7 @@ pub fn printHelp() void {
         \\    list        List recent commands
         \\    stats       Display history statistics
         \\    perf        Display performance metrics for directory
-        \\    recalc-rank Recalculate frecency ranks for all commands
+        \\    recalc-rank Compatibility alias for catalog/search-index repair
         \\    maintenance Rebuild/validate the FTS index and optimize the database
         \\    help        Display this help message
         \\
@@ -175,18 +175,17 @@ pub fn printHelp() void {
         \\-------------------------------------------------------------------------------
         \\
         \\  zigstory recalc-rank
-        \\    Recalculate frecency ranks for all commands in history.
+        \\    Repair catalog statistics and the search index (compatibility command).
         \\
         \\    DESCRIPTION:
-        \\      Updates rank values for all commands based on frequency and recency.
-        \\      Uses frecency algorithm: rank = (frequency * 2.0) + (100.0 / days_since_last_use)
+        \\      Repairs lifetime counts, latest links, directory locations and score keys.
+        \\      Scores use exponential decay with a 30-day half-life; no daily rewrite is needed.
         \\
         \\    FEATURES:
-        \\      * Batched updates in one atomic transaction
+        \\      * Catalog and FTS repair in one atomic transaction
         \\      * Repairs incomplete statistics and handles gaps in history IDs
-        \\      * Progress tracking during recalculation
-        \\      * Optimized for 10,000+ entries
-        \\      * Completes in <1s for 10,000 entries
+        \\      * Rebuilds and validates the trigram index
+        \\      * Preserves stable command/event identities
         \\
         \\    EXAMPLE:
         \\      zigstory recalc-rank
@@ -485,29 +484,25 @@ fn printStatsHelp() void {
 fn printRecalcRankHelp() void {
     const help_text =
         \\
-        \\zigstory recalc-rank - Recalculate command ranks
+        \\zigstory recalc-rank - Repair catalog and search index
         \\
         \\USAGE:
         \\    zigstory recalc-rank
         \\
         \\DESCRIPTION:
-        \\      Recalculates frecency ranks for all commands in history.
-        \\      The frecency algorithm combines frequency and recency to rank
-        \\      commands based on usage patterns.
+        \\      Compatibility alias for explicit catalog and FTS repair.
+        \\      Normal recording updates time-invariant score keys, not per-event ranks.
         \\
         \\ALGORITHM:
-        \\      rank = (frequency * 2.0) + (100.0 / days_since_last_use)
+        \\      score = sum(2 ** ((execution_timestamp - now) / (30 * 86400)))
         \\
-        \\      where:
-        \\        • frequency = number of times command executed
-        \\        • days_since_last_use = days since most recent execution
+        \\      Stored log keys omit the common current-time term for indexed ranking.
         \\
         \\FEATURES:
-        \\      • Batched updates in one atomic transaction
+        \\      • Catalog and FTS repair in one atomic transaction
         \\      • Repairs incomplete statistics and handles gaps in history IDs
-        \\      • Progress tracking during recalculation
-        \\      • Optimized for 10,000+ entries
-        \\      • Completes in <1s for 10,000 entries
+        \\      • Rebuilds and validates the trigram index
+        \\      • Preserves stable command/event identities
         \\
         \\EXAMPLES:
         \\    zigstory recalc-rank

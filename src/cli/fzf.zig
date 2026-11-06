@@ -21,7 +21,7 @@ pub fn runFzf(db: *sqlite.Db, allocator: std.mem.Allocator, io: std.Io) !?[]cons
     }
 
     // 2. Query all commands from database, deduplicated, most recent first.
-    const query = "SELECT cmd FROM history GROUP BY cmd ORDER BY MAX(timestamp) DESC";
+    const query = "SELECT cmd FROM commands ORDER BY last_used DESC,latest_history_id DESC";
     var stmt = try db.prepare(query);
     defer stmt.deinit();
 
@@ -33,11 +33,12 @@ pub fn runFzf(db: *sqlite.Db, allocator: std.mem.Allocator, io: std.Io) !?[]cons
 
     // 3. Spawn fzf with stdin/stdout piped, stderr inherited for the fzf UI
     var child = try std.process.spawn(io, .{
-        .argv = &[_][]const u8{"fzf"},
+        .argv = &[_][]const u8{ "fzf", "--read0", "--print0" },
         .stdin = .pipe,
         .stdout = .pipe,
         .stderr = .inherit,
     });
+    errdefer child.kill(io);
 
     // 4. Pipe commands to fzf's stdin
     {
@@ -47,14 +48,16 @@ pub fn runFzf(db: *sqlite.Db, allocator: std.mem.Allocator, io: std.Io) !?[]cons
 
         if (child.stdin) |stdin| {
             while (try iter.nextAlloc(arena_allocator, .{})) |row| {
+                if (std.mem.indexOfScalar(u8, row.cmd, 0) != null) return error.FzfCannotRepresentNulCommand;
                 stdin.writeStreamingAll(io, row.cmd) catch |err| {
                     if (err == error.BrokenPipe) break;
                     return err;
                 };
-                stdin.writeStreamingAll(io, "\n") catch |err| {
+                stdin.writeStreamingAll(io, "\x00") catch |err| {
                     if (err == error.BrokenPipe) break;
                     return err;
                 };
+                _ = arena.reset(.retain_capacity);
             }
             stdin.close(io);
             child.stdin = null;
@@ -71,9 +74,9 @@ pub fn runFzf(db: *sqlite.Db, allocator: std.mem.Allocator, io: std.Io) !?[]cons
     switch (term) {
         .exited => |code| {
             if (code == 0) {
-                const trimmed = std.mem.trim(u8, stdout_content, " \n\r\t");
-                if (trimmed.len > 0) {
-                    const result = try allocator.dupe(u8, trimmed);
+                const end = if (stdout_content.len > 0 and stdout_content[stdout_content.len - 1] == 0) stdout_content.len - 1 else stdout_content.len;
+                if (end > 0) {
+                    const result = try allocator.dupe(u8, stdout_content[0..end]);
                     allocator.free(stdout_content);
                     return result;
                 }

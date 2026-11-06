@@ -14,7 +14,7 @@ fn scalar(db: *sqlite.Db, comptime sql: []const u8) !i64 {
 }
 
 fn fixture() !sqlite.Db {
-    var db = try legacy.initDb(":memory:");
+    var db = try legacy.initSchema2Fixture(":memory:");
     errdefer db.deinit();
     try db.exec(
         \\INSERT INTO history(id,cmd,cwd,exit_code,duration_ms,timestamp,session_id,hostname,event_id)
@@ -43,10 +43,10 @@ test "catalog prototype migrates exact commands, event metadata and latest locat
     try std.testing.expectEqual(@as(i64, 3), try scalar(&db, "SELECT l.latest_history_id FROM command_locations l JOIN commands c ON c.id=l.command_id JOIN directories d ON d.id=l.directory_id WHERE c.cmd='git status' AND d.cwd='remote'"));
     try std.testing.expectEqual(@as(i64, 1), try scalar(&db, "SELECT COUNT(*) FROM history_events WHERE id=3 AND exit_code=7 AND duration_ms=20 AND timestamp=20 AND session_id='session' AND hostname='host' AND event_id='second'"));
     try std.testing.expectEqual(@as(i64, 1000), try scalar(&db, "SELECT seq FROM sqlite_sequence WHERE name='history_events'"));
-    try std.testing.expectEqual(@as(i64, 0), try scalar(&db, "SELECT COUNT(*) FROM sqlite_schema WHERE name IN ('history','history_fts','command_stats','idx_cmd_hash','idx_rank')"));
+    try std.testing.expectEqual(@as(i64, 0), try scalar(&db, "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name IN ('history','history_fts','command_stats')"));
     try catalog.migratePrototype(&db); // Reopening an already-migrated prototype is harmless.
     try std.testing.expectEqual(@as(i64, 6), try scalar(&db, "SELECT COUNT(*) FROM history_events"));
-    try std.testing.expectError(error.UnsupportedSchemaVersion, legacy.ensureSchema(&db));
+    try legacy.ensureSchema(&db);
 }
 
 test "catalog migration failure rolls back tables and preserves schema-2 history" {
@@ -251,7 +251,7 @@ test "catalog migration persists on disk and old CLI schema checks refuse it" {
     const path = try tmp.dir.realPathFileAlloc(io, "prototype.db", allocator);
     defer allocator.free(path);
     {
-        var db = try legacy.initDb(path);
+        var db = try legacy.initSchema2Fixture(path);
         defer db.deinit();
         try db.exec("INSERT INTO history(cmd,cwd,timestamp,event_id) VALUES('disk event','local',1,'disk-event')", .{}, .{});
         try catalog.migratePrototype(&db);
@@ -260,7 +260,7 @@ test "catalog migration persists on disk and old CLI schema checks refuse it" {
     defer reader.deinit();
     try std.testing.expectEqual(@as(i64, 3), try scalar(&reader, "PRAGMA user_version"));
     try std.testing.expectEqual(@as(i64, 1), try scalar(&reader, "SELECT COUNT(*) FROM history_events WHERE event_id='disk-event'"));
-    try std.testing.expectError(error.UnsupportedSchemaVersion, legacy.ensureSchema(&reader));
+    try legacy.ensureSchema(&reader);
     try std.testing.expectEqual(@as(i64, 3), try scalar(&reader, "PRAGMA user_version"));
 }
 

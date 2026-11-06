@@ -21,6 +21,7 @@ public class ZigstoryPredictor : ICommandPredictor, IDisposable
     private readonly SemaphoreSlim _requestGate = new(1, 1);
     private SqliteConnection? _cacheConnection;
     private long? _cacheDataVersion;
+    private long? _cacheSchemaVersion;
     private bool _disposed;
     
     // LRU cache: max 100 entries for prediction results
@@ -43,6 +44,14 @@ public class ZigstoryPredictor : ICommandPredictor, IDisposable
         SELECT DISTINCT cmd FROM history
         WHERE cmd LIKE (@pattern || '') ESCAPE '\'
         ORDER BY rank DESC, timestamp DESC LIMIT 5";
+    private const string CatalogCandidateCountQuery = @"
+        SELECT COUNT(*) FROM (SELECT 1 FROM commands WHERE cmd LIKE @pattern ESCAPE '\' LIMIT @limit)";
+    private const string CatalogPredictionQuery = @"
+        SELECT cmd FROM commands WHERE cmd LIKE @pattern ESCAPE '\'
+        ORDER BY score_key DESC,last_used DESC,latest_history_id DESC LIMIT 5";
+    private const string CatalogRankedQuery = @"
+        SELECT cmd FROM commands WHERE cmd LIKE (@pattern || '') ESCAPE '\'
+        ORDER BY score_key DESC,last_used DESC,latest_history_id DESC LIMIT 5";
     
     public Guid Id => _guid;
     public string Name => "Zigstory";
@@ -113,11 +122,13 @@ public class ZigstoryPredictor : ICommandPredictor, IDisposable
                     using var versionCommand = connection.CreateCommand();
                     versionCommand.CommandText = "PRAGMA data_version";
                     var version = (long)versionCommand.ExecuteScalar()!;
-                    if (!ReferenceEquals(connection, _cacheConnection) || version != _cacheDataVersion)
+                    if (!ReferenceEquals(connection, _cacheConnection) || version != _cacheDataVersion || _cacheSchemaVersion is null)
                     {
                         _resultCache.Clear();
                         _cacheConnection = connection;
                         _cacheDataVersion = version;
+                        _cacheSchemaVersion = null;
+                        _cacheSchemaVersion = ReadSupportedSchema(connection);
                     }
                     cancellationToken.ThrowIfCancellationRequested();
                     if (_resultCache.TryGet(input, out var cachedResults) && cachedResults != null)
@@ -125,7 +136,7 @@ public class ZigstoryPredictor : ICommandPredictor, IDisposable
                         return BuildSuggestionPackage(cachedResults);
                     }
 
-                    var suggestions = GetSuggestionsFromDatabase(connection, input, cancellationToken);
+                    var suggestions = QuerySuggestions(connection, input, cancellationToken, _cacheSchemaVersion.Value);
                     cancellationToken.ThrowIfCancellationRequested();
                     _resultCache.Set(input, suggestions);
                     return BuildSuggestionPackage(suggestions);
@@ -154,6 +165,12 @@ public class ZigstoryPredictor : ICommandPredictor, IDisposable
             DiagnosticLog.Write(DiagnosticLevel.Error, "prediction_query_failed", $"SQLite_{ex.SqliteErrorCode}");
             return default;
         }
+        catch (NotSupportedException)
+        {
+            Trace.TraceError("Zigstory prediction schema or ranking policy is unsupported.");
+            DiagnosticLog.Write(DiagnosticLevel.Error, "prediction_schema_unsupported", "UnsupportedSchemaOrPolicy");
+            return default;
+        }
     }
 
     /// <summary>
@@ -178,10 +195,31 @@ public class ZigstoryPredictor : ICommandPredictor, IDisposable
     /// </summary>
     private static List<string> GetSuggestionsFromDatabase(
         SqliteConnection connection, string input, CancellationToken cancellationToken)
+        => QuerySuggestions(connection, input, cancellationToken, ReadSupportedSchema(connection));
+
+    private static long ReadSupportedSchema(SqliteConnection connection)
+    {
+        using var version = new SqliteCommand("PRAGMA user_version", connection);
+        var schema = (long)version.ExecuteScalar()!;
+        if (schema is < 0 or > 3) throw new NotSupportedException("Unsupported schema.");
+        if (schema == 3)
+        {
+            using var metadata = new SqliteCommand("SELECT layout_version,ranking_version,half_life_seconds,typeof(layout_version),typeof(ranking_version),typeof(half_life_seconds) FROM catalog_metadata WHERE id=1", connection);
+            using var row = metadata.ExecuteReader();
+            if (!row.Read() || row.IsDBNull(0) || row.IsDBNull(1) || row.IsDBNull(2) ||
+                row.GetString(3) != "integer" || row.GetString(4) != "integer" || row.GetString(5) != "integer" ||
+                row.GetInt64(0) != 2 || row.GetInt64(1) != 1 || row.GetInt64(2) != 2592000)
+                throw new NotSupportedException("Unsupported ranking policy or layout.");
+        }
+        return schema;
+    }
+
+    private static List<string> QuerySuggestions(
+        SqliteConnection connection, string input, CancellationToken cancellationToken, long schema)
     {
         var results = new List<string>(5);
         var pattern = input.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%";
-        using var probe = new SqliteCommand(CandidateCountQuery, connection);
+        using var probe = new SqliteCommand(schema == 3 ? CatalogCandidateCountQuery : CandidateCountQuery, connection);
         probe.Parameters.AddWithValue("@pattern", pattern);
         probe.Parameters.AddWithValue("@limit", CandidateLimit);
         var candidates = (long)probe.ExecuteScalar()!;
@@ -189,7 +227,9 @@ public class ZigstoryPredictor : ICommandPredictor, IDisposable
         if (candidates == 0) return results;
         // Broad prefixes favor the rank index; selective prefixes favor the text index.
         using var command = new SqliteCommand(
-            candidates < CandidateLimit ? PredictionQuery : RankedPredictionQuery, connection);
+            schema == 3
+                ? (candidates < CandidateLimit ? CatalogPredictionQuery : CatalogRankedQuery)
+                : (candidates < CandidateLimit ? PredictionQuery : RankedPredictionQuery), connection);
         command.Parameters.AddWithValue("@pattern", pattern);
         using var reader = command.ExecuteReader();
         while (reader.Read())
@@ -214,6 +254,7 @@ public class ZigstoryPredictor : ICommandPredictor, IDisposable
             _resultCache.Clear();
             _cacheConnection = null;
             _cacheDataVersion = null;
+            _cacheSchemaVersion = null;
             _dbManager.Dispose();
         }
         finally

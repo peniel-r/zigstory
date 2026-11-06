@@ -46,13 +46,13 @@ internal static class HistoryProfiler
             using (var connection = Open(snapshot, SqliteOpenMode.ReadOnly))
             {
                 using var count = connection.CreateCommand();
-                count.CommandText = "SELECT COUNT(*) FROM history";
+                count.CommandText = "SELECT COUNT(*) FROM history_events";
                 rows = (long)count.ExecuteScalar()!;
                 using var sample = connection.CreateCommand();
                 sample.CommandText = """
-                    SELECT substr(cmd,1,8) FROM history
+                    SELECT substr(cmd,1,8) FROM commands
                     WHERE length(trim(cmd)) >= 2
-                    GROUP BY substr(cmd,1,8) ORDER BY COUNT(*) DESC LIMIT 20
+                    GROUP BY substr(cmd,1,8) ORDER BY SUM(frequency) DESC LIMIT 20
                     """;
                 using var reader = sample.ExecuteReader();
                 while (reader.Read()) prefixes.Add(reader.GetString(0));
