@@ -1,11 +1,10 @@
 # Implementation status
 
-Updated October 28, 2026. All previously approved work is committed and pushed on
-`performance_optimizations`, through `64ddac2` (predictor-aware safe upgrades).
-The user confirmed deployment and installed smoke testing. The branch remains
-unmerged. GitHub Actions is not configured/used; local validation is the release
-gate. The final follow-up pass below has also been deployed and smoke-tested by
-the user, who approved committing and pushing it on October 28, 2026.
+Updated November 6, 2026. Reviewed production schema-3 integration is committed
+as `e37f5da` on `performance_optimizations`; the local installation was upgraded
+and verified, with complete backups retained (details below). The user requested
+committing and pushing all remaining changes. The branch remains unmerged.
+GitHub Actions is not configured/used; local validation is the release gate.
 
 ## First-pass performance and usability
 
@@ -520,7 +519,7 @@ Reviewed prototype committed as `d4049cf`. No installation, push or merge.
   backup-aware upgrade/rollback, package checks and production performance gates.
 - [x] `zig build run` and final validation.
 - [x] Human review and approval to commit production integration (November 6).
-- [ ] User deployment and installed smoke test; no deployment was requested.
+- [x] User-authorized full local deployment and installed validation (November 6).
 
 Integration notes: `history` is a read-only compatibility view without obsolete
 rank/hash fields. Legacy schema construction is isolated in `legacy_schema.zig`;
@@ -552,3 +551,25 @@ history or installed files changed. The user reviewed production integration and
 approved committing it on November 6. Deployment must update executable and predictor together from a
 quiet NoProfile shell with the full database backup retained; rollback restores
 that schema-2 directory as well as the old binary/module.
+
+## Local installation upgraded (November 6, 2026)
+
+The user explicitly requested a full local upgrade. The real idle guard passed
+without bypassing it or closing user sessions. Dependencies were verified,
+ReleaseFast `zig build run` succeeded, and the backup-aware upgrader published
+and replaced CLI, installed hook and the complete predictor directory, migrating
+the installed history from schema 2 to 3.
+
+Backup: `C:\Users\mfweax\.zigstory-backups\upgrade-20261106-091905-71531249aac544beb95010bcaabba3e8`.
+The result log records success. Read-only post-install verification compared all
+4,323 event rows with the backup, including exact command/path bytes, status,
+duration, session/host metadata, timestamps and event identities. Integrity and
+foreign-key checks and command frequency/success/latest-link checks passed.
+There are 1,669 exact commands and 202 directories. The installed predictor loads,
+registers and returns five actual-history suggestions (no text reported); its
+directory has eight files / 1.92 MiB. CLI/hook hashes match the current sources,
+and the main profile references the installed hook. Main profile and PATH were
+not edited. Restart PowerShell to load the new DLL and hook in normal sessions.
+
+The user subsequently authorized committing this deployment note and pushing all
+current branch changes on November 6. No merge was requested.
